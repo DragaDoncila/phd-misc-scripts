@@ -63,7 +63,7 @@ def get_pixel_value_at_centers(seg, seg_centers):
         frame = seg[t]
         int_centers = list(map(lambda tpl: tuple(int(el) for el in tpl), frame_centers))
         int_coords = list(map(list, zip(*int_centers)))
-        frame_vals = list(frame[int_coords])
+        frame_vals = list(frame[tuple(int_coords)])
         pixel_vals.append(frame_vals)
     return pixel_vals
 
@@ -85,4 +85,5 @@ if __name__ == "__main__":
     graph = FlowGraph(seg_centers, pixel_vals=pixel_vals)
     for edge in graph.edges:
         print(edge)
+    graph._to_lp('cell_swaps.lp')
     napari.run()
