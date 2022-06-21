@@ -4,7 +4,8 @@ from tifffile import TiffFile
 import napari
 import h5py
 from scipy.ndimage import center_of_mass, label
-from generate_ellipses import FlowGraph
+# from generate_ellipses import FlowGraph
+from flow_graph import FlowGraph
 
 IMS_DIR = '/home/draga/PhD/data/Fluo-C2DL-Huh7/01/'
 GT_DIR = '/home/draga/PhD/data/Fluo-C2DL-Huh7/01_GT/SEG/'
@@ -64,7 +65,7 @@ def get_pixel_value_at_centers(seg, seg_centers):
         int_centers = list(map(lambda tpl: tuple(int(el) for el in tpl), frame_centers))
         int_coords = list(map(list, zip(*int_centers)))
         frame_vals = list(frame[tuple(int_coords)])
-        pixel_vals.append(frame_vals)
+        pixel_vals.extend(frame_vals)
     return pixel_vals
 
 if __name__ == "__main__":
@@ -82,8 +83,8 @@ if __name__ == "__main__":
     pixel_vals = get_pixel_value_at_centers(seg, seg_centers)
     viewer.add_points(point_coords, size=5)     
 
-    graph = FlowGraph(seg_centers, pixel_vals=pixel_vals)
-    for edge in graph.edges:
+    graph = FlowGraph(point_coords, pixel_vals=pixel_vals)
+    for edge in graph._g.es:
         print(edge)
-    graph._to_lp('cell_swaps.lp')
+    graph._to_lp('cell_swaps_autogen2.lp')
     napari.run()
