@@ -77,14 +77,14 @@ if __name__ == "__main__":
     viewer = napari.Viewer()
 
     im = viewer.open('/home/draga/PhD/data/toy_data/easy-no-divide-swaps/Fluo-N2DL-HeLa.tif', layer_type='image')[0].data
-    seg = viewer.open('/home/draga/PhD/data/toy_data/easy-no-divide-swaps/seg_Fluo-N2DL-HeLa.tif', layer_type='labels')[0].data
-    seg_centers = get_centers(seg)
-    point_coords = get_point_coords(seg_centers)
-    pixel_vals = get_pixel_value_at_centers(seg, seg_centers)
-    viewer.add_points(point_coords, size=5)     
+    # seg = viewer.open('/home/draga/PhD/data/toy_data/easy-no-divide-swaps/seg_Fluo-N2DL-HeLa.tif', layer_type='labels')[0].data
+    # seg_centers = get_centers(seg)
+    # point_coords = get_point_coords(seg_centers)
+    # pixel_vals = get_pixel_value_at_centers(seg, seg_centers)
+    # viewer.add_points(point_coords, size=5)     
 
-    graph = FlowGraph(point_coords, pixel_vals=pixel_vals)
-    for edge in graph._g.es:
-        print(edge)
-    graph._to_lp('cell_swaps_autogen2.lp')
+    # graph = FlowGraph(point_coords, pixel_vals=pixel_vals)
+    # for edge in graph._g.es:
+    #     print(edge)
+    # graph._to_lp('cell_swaps_autogen2.lp')
     napari.run()
