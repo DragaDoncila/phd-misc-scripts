@@ -3,13 +3,33 @@ from typing import Callable, List, Optional, Tuple, Union
 
 import numpy as np
 import igraph
-from itertools import product
+from itertools import combinations, product
 
 
 def euclidean_cost_func(source_node, dest_node):
     # smaller distance should be bigger cost, so we take reciprocal
     return 1 / np.linalg.norm(np.asarray(dest_node['coords']) - np.asarray(source_node['coords']))
 
+def min_pairwise_distance_cost(potential_parent, potential_children):
+    """Get the smallest sum of distance from parent to two potential children.
+
+    Parameters
+    ----------
+    potential_parent : Tuple[float]
+        coordinates of potential parent
+    potential_children : List[Tuple[float]]
+        list of coordinates of potential children
+    """
+    min_dist = math.inf
+    for child_pair in combinations(potential_children, 2):
+        #TODO: no concept of angles
+        distance_first_child = np.linalg.norm(np.asarray(potential_parent)-np.asarray(child_pair[0]))
+        distance_second_child = np.linalg.norm(np.asarray(potential_parent) - np.asarray(child_pair[1]))
+        distance_sum = distance_first_child + distance_second_child
+        if distance_sum < min_dist:
+            min_dist = distance_sum
+    # the smaller the distance, the bigger the prize
+    return 1 / min_dist
 
 # TODO: fix so box doesn't have to start at 0
 def dist_to_edge_cost_func(node, bounding_box_dimensions):
@@ -55,6 +75,7 @@ class FlowGraph:
         self.cost_func = cost_func or euclidean_cost_func
         self.im_dim = im_dim
         self._g = self._init_graph(coords, pixel_vals)
+        self._binary_indicators = []
         self._init_edges()
 
     def _init_graph(self, coords, pixel_vals=None):
@@ -74,6 +95,7 @@ class FlowGraph:
             g.add_vertex(
                 name=f'{i}',
                 label=f'{coords[i][0]}_{pixel_vals[i]}',
+                # TODO: time shouldn't factor here right?
                 coords=coords[i],
                 pixel_value=pixel_vals[i],
                 t=coords[i][0],
@@ -213,10 +235,11 @@ class FlowGraph:
         self._g.add_edge(src, div, cost=0, var_name='e_sd', label=0)
         potential_parents = self._g.vs(self._may_divide)
         for v in potential_parents:
-                var_name = f"e_d_{v['t']}{v['pixel_value' or '']}"
-                #TODO: probs don't want a random cost here...
-                cost = np.random.uniform()
-                self._g.add_edge(div, v, cost=cost, var_name=var_name, label=str(cost)[:5])
+            var_name = f"e_d_{v['t']}{v['pixel_value' or '']}"
+            # TODO: should just grab them all in a func outside loop
+            potential_children = self._g.vs(t=v['t']+1)
+            cost = min_pairwise_distance_cost(v['coords'], [child['coords'] for child in potential_children])
+            self._g.add_edge(div, v, cost=cost, var_name=var_name, label=str(cost)[:5])
 
     def _is_virtual_node(self, v):
         return v['is_source'] or v['is_appearance'] or v['is_division'] or v['is_target']
@@ -305,16 +328,21 @@ class FlowGraph:
         potential_parents = self._g.vs(self._may_divide)
         for v in potential_parents:
             incoming, outgoing = self._get_incident_edges(v)
-            div_edge = incoming(lambda e: 'e_d' in e['var_name'])[0]
+            div_edge = incoming(lambda e: 'e_d' in e['var_name'])[0]['var_name']
             other_incoming_edges = incoming(lambda e: 'e_d' not in e['var_name'])
             incoming_sum = self._get_var_sum_str([e['var_name'] for e in other_incoming_edges])
             
-            # must have appearance or migration before we divide
-            div_str += f'\t{incoming_sum} - {div_edge["var_name"]} >= 0\n'
+            # must have appearance or immigration before we divide
+            div_str += f'\t{incoming_sum} - {div_edge} >= 0\n'
 
             # if we have dv, we cannot flow into target
-            target_edge = outgoing(lambda e: '_t' in e['var_name'])[0]
-            div_str += f'\t{target_edge["var_name"]} + {div_edge["var_name"]} <= 1\n'
+            target_edge = outgoing(lambda e: '_t' in e['var_name'])[0]['var_name']
+            delta_var = f'delta_{div_edge}'
+            self._binary_indicators.append(delta_var)
+            #TODO: make coefficient parameter?
+            div_str += f'\t{div_edge} - {delta_var} <= 0\n'
+            div_str += f'\t{div_edge} - 0.00001 {delta_var} >= 0\n'
+            div_str += f'\t{delta_var} + {target_edge} <= 1\n\n'
 
         return div_str
     
@@ -332,12 +360,16 @@ class FlowGraph:
             bounds_str += f'\t0 <= {edge["var_name"]} <= 1\n'
         return bounds_str
 
+    def _get_binary_var_str(self):
+        return 'Binary\n\t' + ' '.join(self._binary_indicators)
+
     def _to_lp(self, path):
         obj_str = self._get_objective_string()
         constraints_str = self._get_constraints_string()
         bounds_str = self._get_bounds_string()
+        binary_vars = self._get_binary_var_str()
 
-        total_str = f'{obj_str}\n{constraints_str}\n{bounds_str}'
+        total_str = f'{obj_str}\n{constraints_str}\n{bounds_str}\n{binary_vars}'
         with open(path, 'w') as f:
             f.write(total_str)
 
@@ -345,5 +377,5 @@ if __name__ == '__main__':
     coords = [(0, 50.0, 50.0), (0, 40, 50), (0, 30, 57), (1, 50, 52), (1, 38, 51), (1, 29, 60)]
     pixel_vals = [1, 2, 3, 1, 2, 3]
     graph = FlowGraph((2, 100, 100), coords, t=2, pixel_vals=pixel_vals)
-    igraph.plot(graph._g, layout=graph._g.layout('kk'))
-    # graph._to_lp('gibberish.lp')
+    # igraph.plot(graph._g, layout=graph._g.layout('kk'))
+    graph._to_lp('new_division_cost.lp')
