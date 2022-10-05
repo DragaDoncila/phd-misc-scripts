@@ -7,14 +7,18 @@ tracks_data = df.read_csv(ALL_TRACKS)
 tracks_coords = tracks_data[['t', 'z', 'y', 'x']]
 max_t = tracks_coords['t'].max().compute()
 min_t = tracks_coords['t'].min().compute()
-# just randomly added 10 to the biggest values so they wouldn't be "right on the edge".
-# This is pretty shocking so we need some other way to bound the nodes
-# also they don't start at 0 so it's gonna be so skewed to disappearance...
-im_dim = (4340, 1964, 2157)
-tracks_coords_tuples = list(tracks_coords.itertuples(index=False, name=None))
+print(tracks_coords.min().compute())
+print(tracks_coords.max().compute())
+im_corners = [(505, 10, 713), (4340, 1964, 2157)]
+# tracks_coords_tuples = list(tracks_coords.itertuples(index=False, name=None))
 start = time.time()
-graph = FlowGraph(im_dim, tracks_coords_tuples, min_t=min_t, max_t=max_t)
+graph = FlowGraph(im_corners, tracks_coords, min_t=min_t, max_t=max_t)
 end = time.time()
 build_duration = end - start
 print("Build duration: ", build_duration)
 
+print("Writing model...")
+graph._to_lp('140521_late_te_all_tracks.lp')
+end2 = time.time()
+write_duration = end2 - end
+print("Write duration: ", write_duration)

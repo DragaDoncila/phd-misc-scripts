@@ -5,8 +5,11 @@ from typing import Callable, List, Optional, Tuple, Union
 import numpy as np
 import igraph
 from itertools import combinations, product
+import dask.dataframe as df
+import dask.array as da
 
 from scipy.spatial.distance import cdist
+from scipy.spatial import KDTree
 from tqdm import tqdm
 
 
@@ -17,25 +20,19 @@ def euclidean_cost_func(source_node, dest_node):
     )
 
 
-def min_pairwise_distance_cost(potential_parent, potential_children):
+def min_pairwise_distance_cost(child_distances):
     """Get the smallest sum of distance from parent to two potential children.
 
     Parameters
     ----------
-    potential_parent : Tuple[float]
-        coordinates of potential parent
-    potential_children : List[Tuple[float]]
-        list of coordinates of potential children
+    child_distances : List[Tuple[float]]
+        list of distances to k closest children
     """
     min_dist = math.inf
-    for child_pair in combinations(potential_children, 2):
+    for i, j in combinations(range(len(child_distances)), 2):
         # TODO: no concept of angles
-        distance_first_child = np.linalg.norm(
-            np.asarray(potential_parent) - np.asarray(child_pair[0])
-        )
-        distance_second_child = np.linalg.norm(
-            np.asarray(potential_parent) - np.asarray(child_pair[1])
-        )
+        distance_first_child = child_distances[i]
+        distance_second_child = child_distances[j]
         distance_sum = distance_first_child + distance_second_child
         if distance_sum < min_dist:
             min_dist = distance_sum
@@ -46,12 +43,15 @@ def min_pairwise_distance_cost(potential_parent, potential_children):
 # TODO: fix so box doesn't have to start at 0
 def dist_to_edge_cost_func(bounding_box_dimensions, node_coords):
     min_to_edge = math.inf
+    box_mins = [dim[0] for dim in bounding_box_dimensions]
     # skip time coords as not relevant
-    for i in range(1, len(bounding_box_dimensions)):
-        box_max = bounding_box_dimensions[i]
+    for i in range(len(node_coords)):
+        box_dim_max = bounding_box_dimensions[1][i]
+        box_dim_min = bounding_box_dimensions[0][i]
+
         node_val = node_coords[i]
-        distance_to_min = node_val - 0
-        distance_to_max = box_max - node_val
+        distance_to_min = node_val - box_dim_min
+        distance_to_max = box_dim_max - node_val
         smallest = (
             distance_to_min if distance_to_min < distance_to_max else distance_to_max
         )
@@ -64,8 +64,7 @@ class FlowGraph:
     def __init__(
         self,
         im_dim: Tuple[int],
-        coords: List[Union[Tuple, np.ndarray]],
-        cost_func: Optional[Callable] = None,
+        coords: 'dask.dataframe.DataFrame',
         min_t=0,
         max_t=None,
         pixel_vals: List[int] = None,
@@ -79,14 +78,11 @@ class FlowGraph:
 
         Parameters
         ----------
-        im_dim : Tuple[int]
-            maxes of image bounding box
-        coords : List[Union[Tuple|np.ndarray]]
-            coordinates of each identified object, with first coordinate
-            being time
-        cost_func: Optional[Callable]
-            function that takes two vertices and determines cost of edge
-            between them. By default, euclidean distance between node centers
+        im_dim : List[Tuple[int], Tuple[int]]
+            top left and bottom right of frame bounding box (across all frames)
+        coords : DataFrame
+            DataFrame with columns 't', 'y', 'x' and optionally 'z' of
+            blob center coordinates for which to solve
         min_t: int, optional
             smallest frame number in the image. If missing, will be determined
             from min value of first coordinate of each object in coords
@@ -96,41 +92,75 @@ class FlowGraph:
         pixel_vals : List[int], optional
             pixel value of each object at coordinate, by default None
         """
-        self.min_t = min_t or min([coord[0] for coord in coords])
-        self.max_t = max_t or max([coord[0] for coord in coords])
+        self.min_t = min_t or coords['t'].min()
+        self.max_t = max_t or coords['t'].max()
         self.t = self.max_t - self.min_t + 1
-        self.cost_func = cost_func or euclidean_cost_func
         self.im_dim = im_dim
+        self.spatial_cols = ['y', 'x']
+        if 'z' in coords.columns:
+            self.spatial_cols.insert(0, 'z')
+        if not isinstance(coords, df.DataFrame):
+            coords = df.from_pandas(coords, chunksize=10000)
+
         self._g = self._init_nodes(coords, pixel_vals)
+        self._kdt_dict = self._build_trees()
         self._binary_indicators = []
         self._init_edges()
+
+    
+    def _build_trees(self):
+        """Build dictionary of t -> kd tree of all coordinates in frame t.
+        """
+        kd_dict = {}
+
+        for t in tqdm(range(self.min_t, self.max_t + 1), total=self.t, desc='Building kD trees'):
+            frame_vertices = self._g.vs(t=t)
+            frame_indices = np.asarray([v.index for v in frame_vertices])
+            frame_coords = frame_vertices['coords']
+            new_tree = KDTree(frame_coords)
+            kd_dict[t] = {'tree': new_tree, 'indices': frame_indices}
+        return kd_dict
 
     def _init_nodes(self, coords, pixel_vals=None):
         """Create igraph from coords and pixel_vals with len(coords) vertices.
 
         Parameters
         ----------
-        coords : _type_
-            _description_
-        pixel_vals : _type_, optional
-            _description_, by default None
+        coords : DataFrame
+            DataFrame with columns 't', 'y', 'x' and optionally 'z' of
+            blob center coordinates for which to solve
+        pixel_vals : List[int], optional
+            List of integer values for each node, by default None
         """
         if not pixel_vals:
-            pixel_vals = [None for _ in range(len(coords))]
+            pixel_vals = ['_' for _ in range(len(coords))]
+
+        all_attrs = [
+            [
+                f"{row['t']}_{pixel_vals[i]}",  # labels
+                row[self.spatial_cols].to_numpy(), # coords
+                pixel_vals[i],                  # pixel_value
+                row['t'],                       # t
+                False,                          # is_source
+                False,                          # is_target
+                False,                          # is_appearance
+                False                           # is_division
+            ]
+            for i, row in tqdm(coords.iterrows(), total=len(coords), desc='Generating vertex attrs')
+        ]
+        all_attrs_t = list(zip(*all_attrs))
+        all_attrs_dict = {
+            'label': all_attrs_t[0],
+            'coords': all_attrs_t[1],
+            'pixel_value': all_attrs_t[2],
+            't': all_attrs_t[3],
+            'is_source': all_attrs_t[4],
+            'is_target': all_attrs_t[5],
+            'is_appearance': all_attrs_t[6],
+            'is_division': all_attrs_t[7]
+        }
         g = igraph.Graph(directed=True)
-        for i in range(len(coords)):
-            g.add_vertex(
-                name=f"{i}",
-                label=f"{coords[i][0]}_{pixel_vals[i]}",
-                # TODO: time shouldn't factor here right?
-                coords=coords[i],
-                pixel_value=pixel_vals[i],
-                t=coords[i][0],
-                is_source=False,
-                is_target=False,
-                is_appearance=False,
-                is_division=False,
-            )
+        g.add_vertices(len(coords), all_attrs_dict)
 
         self.source = g.add_vertex(
             name="source",
@@ -183,11 +213,8 @@ class FlowGraph:
         return g
 
     def _init_edges(self):
-        # self._init_appear_exit_edges()
-
-        # make edge for all inner nodes
+        self._init_appear_exit_edges()
         self._init_migration_edges()
-
         self._init_division_edges()
 
     def _init_appear_exit_edges(self):
@@ -207,13 +234,22 @@ class FlowGraph:
         real_node_coords = np.asarray([v["coords"] for v in real_nodes])
         cost_func = partial(dist_to_edge_cost_func, self.im_dim)
         real_node_costs = np.apply_along_axis(cost_func, 1, real_node_coords)
+
+        var_names_app = []
+        costs_app = []
+        edges_app = []
+        labels_app = []
+
+        var_names_target = []
+        costs_target = []
+        edges_target = []
+        labels_target = []
+
         for i, v in tqdm(
             enumerate(real_nodes),
             desc="Making appearance/exit edges",
             total=len(real_nodes),
         ):
-            var_name_app = f"e_a_{v['t']}{v['pixel_value'] or ''}"
-            var_name_target = f"e_{v['t']}{v['pixel_value' or '']}_t"
             # first frame should be able to appear at no extra cost
             if v["t"] == self.min_t:
                 cost_app = 0
@@ -224,60 +260,127 @@ class FlowGraph:
                 cost_target = 0
             else:
                 cost_app = cost_target = real_node_costs[i]
-            self._g.add_edge(
-                self.appearance,
-                v,
-                cost=cost_app,
-                var_name=var_name_app,
-                label=str(cost_app)[:4],
-            )
-            self._g.add_edge(
-                v,
-                self.target,
-                cost=cost_target,
-                var_name=var_name_target,
-                label=str(cost_target)[:4],
-            )
+            
+            var_names_app.append(f"e_a_{v['t']}{v['pixel_value'] or ''}")
+            costs_app.append(cost_app)
+            edges_app.append((self.appearance.index, v.index))
+            labels_app.append(str(cost_app)[:4])
+
+            var_names_target.append(f"e_{v['t']}{v['pixel_value' or '']}_t")
+            costs_target.append(cost_target)
+            edges_target.append((v.index, self.target.index))
+            labels_target.append(str(cost_target)[:4])
+        
+        app_attrs = {
+            'label': labels_app,
+            'var_name': var_names_app,
+            'cost': costs_app
+        }
+        target_attrs = {
+            'label': labels_target,
+            'var_name': var_names_target,
+            'cost': costs_target
+        }
+
+        self._g.add_edges(edges_app, attributes=app_attrs)
+        self._g.add_edges(edges_target, attributes=target_attrs)
 
     def _init_migration_edges(self):
         """Connect all pairs vertices in frames 0..n-1 to 1..n.
 
         Cost is computed using the migration cost function.
         """
-        for source_t in range(self.min_t, self.max_t):
+        edges = []
+        var_names = []
+        all_costs = []
+        labels = []
+
+        for source_t in tqdm(
+                range(self.min_t, self.max_t),
+                desc=f"Making migration edges",
+                total=self.t,
+            ):
             dest_t = source_t + 1
             source_nodes = self._g.vs(t=source_t)
-            source_coords = np.asarray([node["coords"] for node in source_nodes])
-            dest_nodes = self._g.vs(t=dest_t)
-            dest_coords = np.asarray([node["coords"] for node in dest_nodes])
-            print(f"Computing costs {source_t}-{dest_t}")
-            costs = cdist(source_coords, dest_coords)
-            for i, src in tqdm(
-                enumerate(source_nodes),
-                desc=f"Making migration edges frame {source_t}",
-                total=len(source_nodes),
-            ):
-                for j, dest in enumerate(dest_nodes):
-                    cost = costs[i, j]
-                    var_name = f"e_{src['t']}{src['pixel_value']}_{dest['t']}{dest['pixel_value']}"
-                    self._g.add_edge(
-                        src, dest, cost=cost, var_name=var_name, label=str(cost)[:5]
-                    )
+
+            source_coords = da.asarray(source_nodes['coords'])
+            dest_tree = self._kdt_dict[dest_t]['tree']
+            # TODO: parameterize the closest neighbours
+            dest_distances, dest_indices = dest_tree.query(source_coords, k=10 if dest_tree.n > 10 else dest_tree.n - 1)
+
+            for i, src in enumerate(source_nodes):
+                dest_vertex_indices = self._kdt_dict[dest_t]['indices'][dest_indices[i]]
+                dest_vertices = self._g.vs[list(dest_vertex_indices)]
+                # We're relying on these indices not changing partway through construction.
+                np.testing.assert_allclose(dest_tree.data[dest_indices[i]], [v['coords'] for v in dest_vertices])
+                
+                current_edges = [(src.index, dest_index) for dest_index in dest_vertex_indices]
+                current_costs = dest_distances[i]
+                current_var_names = [f"e_{src['t']}{src['pixel_value']}_{dest['t']}{dest['pixel_value']}" for dest in dest_vertices]
+                current_labels = [str(cost)[:5] for cost in current_costs]
+
+                edges.extend(current_edges)
+                var_names.extend(current_var_names)
+                labels.extend(current_labels)
+                all_costs.extend(current_costs)
+
+        all_attrs = {
+            'var_name': var_names,
+            'cost': all_costs,
+            'label': labels
+        }
+        self._g.add_edges(edges, attributes=all_attrs)
 
     def _init_division_edges(self):
         """Connect source to division to all vertices up to 2nd last frame."""
         self._g.add_edge(self.source, self.division, cost=0, var_name="e_sd", label=0)
-        potential_parents = self._g.vs(self._may_divide)
-        for v in potential_parents:
-            var_name = f"e_d_{v['t']}{v['pixel_value' or '']}"
-            # TODO: should just grab them all in a func outside loop
-            potential_children = self._g.vs(t=v["t"] + 1)
-            cost = min_pairwise_distance_cost(
-                v["coords"], [child["coords"] for child in potential_children]
-            )
-            self._g.add_edge(
-                self.division, v, cost=cost, var_name=var_name, label=str(cost)[:5]
-            )
+        edges = []
+        all_costs = []
+        var_names = []
+        labels = []
+
+        # TODO: we can pull a lot of this out into function(s)
+        for t, tree_dict in tqdm(
+                self._kdt_dict.items(),
+                desc="Making division edges",
+                total=len(self._kdt_dict),
+            ):
+            if t == self.max_t:
+                continue
+
+            parent_tree = tree_dict['tree']
+            parent_indices = tree_dict['indices']
+
+            child_tree_dict = self._kdt_dict[t+1]
+            child_tree = child_tree_dict['tree']
+            child_indices = child_tree_dict['indices']
+            nearest_distances, nearest_indices = child_tree.query(parent_tree.data, k=10 if child_tree.n > 10 else child_tree.n - 1)
+            
+            for i, parent_index in enumerate(parent_indices):
+                dest_vertex_indices = child_indices[nearest_indices[i]]
+                dest_vertices = self._g.vs[list(dest_vertex_indices)]
+                # We're relying on these indices not changing partway through construction.
+                np.testing.assert_allclose(child_tree.data[nearest_indices[i]], [v['coords'] for v in dest_vertices])
+                parent_vertex = self._g.vs[parent_index]
+
+                division_edge = (self.division.index, parent_index)
+                # TODO: get better cost
+                cost = min_pairwise_distance_cost(nearest_distances[i])
+                var_name = f"e_d_{parent_vertex['t']}{parent_vertex['pixel_value' or '']}"
+                label = str(cost)[:5]
+
+                edges.append(division_edge)
+                all_costs.append(cost)
+                var_names.append(var_name)
+                labels.append(label)
+
+        all_attrs = {
+            'var_name': var_names,
+            'cost': all_costs,
+            'label': labels
+        }
+        self._g.add_edges(edges, attributes=all_attrs)
+
 
     def _is_virtual_node(self, v):
         return (
@@ -437,6 +540,7 @@ class FlowGraph:
 
 
 if __name__ == "__main__":
+    import pandas as pd
     # coords = [(0, 50.0, 50.0), (0, 40, 50), (0, 30, 57), (1, 50, 52), (1, 38, 51), (1, 29, 60)]
     # pixel_vals = [1, 2, 3, 1, 2, 3]
 
@@ -451,8 +555,10 @@ if __name__ == "__main__":
         (2, 37, 53),
         (2, 28, 64),
     ]
+    coords = pd.DataFrame(coords, columns=['t', 'y', 'x'])
+
     pixel_vals = [1, 2, 3, 1, 2, 3, 1, 2, 3]
-    graph = FlowGraph((3, 100, 100), coords, max_t=2, pixel_vals=pixel_vals)
-    # igraph.plot(graph._g, layout=graph._g.layout('rt'))
+    graph = FlowGraph([(0, 0), (100, 100)], coords, min_t=0, max_t=2, pixel_vals=pixel_vals)
+    igraph.plot(graph._g, layout=graph._g.layout('rt'))
     # graph._to_lp('new_division_cost.lp')
     # print(cdist(coords[0:3], coords[3:6]))
