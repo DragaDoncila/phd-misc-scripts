@@ -11,6 +11,7 @@ import dask.array as da
 from scipy.spatial.distance import cdist
 from scipy.spatial import KDTree
 from tqdm import tqdm
+import pandas as pd
 
 
 def euclidean_cost_func(source_node, dest_node):
@@ -132,32 +133,23 @@ class FlowGraph:
         pixel_vals : List[int], optional
             List of integer values for each node, by default None
         """
+        n = len(coords)
         if not pixel_vals:
-            pixel_vals = ['_' for _ in range(len(coords))]
+            pixel_vals = np.zeros(n)
+        pixel_vals = pd.Series(pixel_vals)
 
-        all_attrs = [
-            [
-                f"{row['t']}_{pixel_vals[i]}",  # labels
-                row[self.spatial_cols].to_numpy(), # coords
-                pixel_vals[i],                  # pixel_value
-                row['t'],                       # t
-                False,                          # is_source
-                False,                          # is_target
-                False,                          # is_appearance
-                False                           # is_division
-            ]
-            for i, row in tqdm(coords.iterrows(), total=len(coords), desc='Generating vertex attrs')
-        ]
-        all_attrs_t = list(zip(*all_attrs))
+        coords_numpy = coords[self.spatial_cols].compute().to_numpy()
+        false_arr = np.broadcast_to(False, n)
+        times = coords['t'].compute()
         all_attrs_dict = {
-            'label': all_attrs_t[0],
-            'coords': all_attrs_t[1],
-            'pixel_value': all_attrs_t[2],
-            't': all_attrs_t[3],
-            'is_source': all_attrs_t[4],
-            'is_target': all_attrs_t[5],
-            'is_appearance': all_attrs_t[6],
-            'is_division': all_attrs_t[7]
+            'label': times.astype(str).str.cat(pixel_vals.astype(str), sep='_'),
+            'coords': coords_numpy,
+            'pixel_value': pixel_vals,
+            't': times.to_numpy(),
+            'is_source': false_arr,
+            'is_target': false_arr,
+            'is_appearance': false_arr,
+            'is_division': false_arr,
         }
         g = igraph.Graph(directed=True)
         g.add_vertices(len(coords), all_attrs_dict)
