@@ -97,6 +97,7 @@ class FlowGraph:
         self.max_t = max_t or coords['t'].max()
         self.t = self.max_t - self.min_t + 1
         self.im_dim = im_dim
+        # TODO: we basically immediately instantiate the dask df - let's just take pandas from the getgo
         self.spatial_cols = ['y', 'x']
         if 'z' in coords.columns:
             self.spatial_cols.insert(0, 'z')
@@ -135,7 +136,7 @@ class FlowGraph:
         """
         n = len(coords)
         if not pixel_vals:
-            pixel_vals = np.zeros(n)
+            pixel_vals = np.zeros(n, dtype=np.int8)
         pixel_vals = pd.Series(pixel_vals)
 
         coords_numpy = coords[self.spatial_cols].compute().to_numpy()
@@ -145,7 +146,7 @@ class FlowGraph:
             'label': times.astype(str).str.cat(pixel_vals.astype(str), sep='_'),
             'coords': coords_numpy,
             'pixel_value': pixel_vals,
-            't': times.to_numpy(),
+            't': times.to_numpy(dtype=np.int32),
             'is_source': false_arr,
             'is_target': false_arr,
             'is_appearance': false_arr,
@@ -258,7 +259,7 @@ class FlowGraph:
             edges_app.append((self.appearance.index, v.index))
             labels_app.append(str(cost_app)[:4])
 
-            var_names_target.append(f"e_{v['t']}{v['pixel_value' or '']}_t")
+            var_names_target.append(f"e_{v['t']}_{v['pixel_value' or '']}_t")
             costs_target.append(cost_target)
             edges_target.append((v.index, self.target.index))
             labels_target.append(str(cost_target)[:4])
