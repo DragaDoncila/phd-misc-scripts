@@ -406,8 +406,8 @@ class FlowGraph:
         return var_sum
 
     def _get_objective_string(self):
-        var_names = [edge["var_name"] for edge in self._g.es]
-        edge_costs = [edge["cost"] for edge in self._g.es]
+        var_names = self._g.es['var_name']
+        edge_costs = self._g.es['cost']
         obj_str = "Minimize\n\t"
         for i in range(len(var_names)):
             var_cost_str = f"{edge_costs[i]} {var_names[i]} + "
@@ -425,12 +425,8 @@ class FlowGraph:
 
     def _get_flow_constraints(self):
         # out of source and into target
-        source_outgoing_names = [
-            edge["var_name"] for edge in self._get_incident_edges(self.source)[1]
-        ]
-        target_incoming_names = [
-            edge["var_name"] for edge in self._get_incident_edges(self.target)[0]
-        ]
+        source_outgoing_names = self._get_incident_edges(self.source)[1]['var_name']
+        target_incoming_names = self._get_incident_edges(self.target)[0]["var_name"]
         source_outgoing_sum = self._get_var_sum_str(source_outgoing_names)
         target_incoming_sum = self._get_var_sum_str(target_incoming_names, neg="-")
         network_capacity_str = f"{source_outgoing_sum} + {target_incoming_sum} = 0\n"
@@ -440,18 +436,10 @@ class FlowGraph:
         appearance_incoming, appearance_outgoing = self._get_incident_edges(
             self.appearance
         )
-        division_incoming_sum = self._get_var_sum_str(
-            [edge["var_name"] for edge in division_incoming]
-        )
-        division_outgoing_sum = self._get_var_sum_str(
-            [edge["var_name"] for edge in division_outgoing], neg="-"
-        )
-        appearance_incoming_sum = self._get_var_sum_str(
-            [edge["var_name"] for edge in appearance_incoming]
-        )
-        appearance_outgoing_sum = self._get_var_sum_str(
-            [edge["var_name"] for edge in appearance_outgoing], neg="-"
-        )
+        division_incoming_sum = self._get_var_sum_str(division_incoming['var_name'])
+        division_outgoing_sum = self._get_var_sum_str(division_outgoing["var_name"], neg="-")
+        appearance_incoming_sum = self._get_var_sum_str(appearance_incoming['var_name'])
+        appearance_outgoing_sum = self._get_var_sum_str(appearance_outgoing['var_name'], neg="-")
         virtual_capacity_str = (
             f"\t{division_incoming_sum} + {division_outgoing_sum} = 0\n"
         )
@@ -465,8 +453,8 @@ class FlowGraph:
             t_nodes = self._g.vs.select(t=t)
             for node in t_nodes:
                 incoming_edges, outgoing_edges = self._get_incident_edges(node)
-                incoming_names = [edge["var_name"] for edge in incoming_edges]
-                outgoing_names = [edge["var_name"] for edge in outgoing_edges]
+                incoming_names = incoming_edges['var_name']
+                outgoing_names = outgoing_edges['var_name']
 
                 incoming_sum = self._get_var_sum_str(incoming_names)
                 outgoing_sum = self._get_var_sum_str(outgoing_names, neg="-")
