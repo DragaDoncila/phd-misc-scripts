@@ -217,8 +217,7 @@ class FlowGraph:
 
     def _init_edges(self):
         self._init_appear_exit_edges()
-        self._init_migration_edges()
-        self._init_division_edges()
+        self._init_migration_division_edges()
 
     def _init_appear_exit_edges(self):
         """Connect appearance to all vertices, and all vertices to target.
@@ -288,7 +287,7 @@ class FlowGraph:
         self._g.add_edges(edges_app, attributes=app_attrs)
         self._g.add_edges(edges_target, attributes=target_attrs)
 
-    def _init_migration_edges(self):
+    def _init_migration_division_edges(self):
         """Connect all pairs vertices in frames 0..n-1 to 1..n.
 
         Cost is computed using the migration cost function.
@@ -298,10 +297,16 @@ class FlowGraph:
         all_costs = []
         labels = []
 
+        self._g.add_edge(self.source, self.division, cost=0, var_name="e_sd", label=0)
+        edges_div = []
+        all_costs_div = []
+        var_names_div = []
+        labels_div = []
+
         for source_t in tqdm(
                 range(self.min_t, self.max_t),
-                desc=f"Making migration edges",
-                total=self.t,
+                desc=f"Making migration & division edges",
+                total=self.t-1,
             ):
             dest_t = source_t + 1
             source_nodes = self._g.vs(t=source_t)
@@ -327,64 +332,24 @@ class FlowGraph:
                 labels.extend(current_labels)
                 all_costs.extend(current_costs)
 
-        all_attrs = {
-            'var_name': var_names,
-            'cost': all_costs,
-            'label': labels
-        }
-        self._g.add_edges(edges, attributes=all_attrs)
-
-    def _init_division_edges(self):
-        """Connect source to division to all vertices up to 2nd last frame."""
-        self._g.add_edge(self.source, self.division, cost=0, var_name="e_sd", label=0)
-        edges = []
-        all_costs = []
-        var_names = []
-        labels = []
-
-        # TODO: we can pull a lot of this out into function(s)
-        for t, tree_dict in tqdm(
-                self._kdt_dict.items(),
-                desc="Making division edges",
-                total=len(self._kdt_dict),
-            ):
-            if t == self.max_t:
-                continue
-
-            parent_tree = tree_dict['tree']
-            parent_indices = tree_dict['indices']
-
-            child_tree_dict = self._kdt_dict[t+1]
-            child_tree = child_tree_dict['tree']
-            child_indices = child_tree_dict['indices']
-            nearest_distances, nearest_indices = child_tree.query(parent_tree.data, k=10 if child_tree.n > 10 else child_tree.n - 1)
-            
-            for i, parent_index in enumerate(parent_indices):
-                dest_vertex_indices = child_indices[nearest_indices[i]]
-                dest_vertices = self._g.vs[list(dest_vertex_indices)]
-                # We're relying on these indices not changing partway through construction.
-                np.testing.assert_allclose(child_tree.data[nearest_indices[i]], [v['coords'] for v in dest_vertices])
-                parent_vertex = self._g.vs[parent_index]
-
-                division_edge = (self.division.index, parent_index)
+                division_edge = (self.division.index, src.index)
                 # TODO: get better cost
-                cost = closest_neighbour_child_cost(parent_vertex['coords'], child_tree.data[nearest_indices[i]])
+                cost_div = closest_neighbour_child_cost(src['coords'], dest_tree.data[dest_indices[i]])
                 # cost = min_pairwise_distance_cost(nearest_distances[i])
-                var_name = f"e_d_{parent_vertex['t']}{parent_vertex['pixel_value' or '']}"
-                label = str(cost)[:5]
+                var_name_div = f"e_d_{src['t']}{src['pixel_value']}"
+                label_div = str(cost_div)[:5]
 
-                edges.append(division_edge)
-                all_costs.append(cost)
-                var_names.append(var_name)
-                labels.append(label)
+                edges_div.append(division_edge)
+                all_costs_div.append(cost_div)
+                var_names_div.append(var_name_div)
+                labels_div.append(label_div)
 
         all_attrs = {
-            'var_name': var_names,
-            'cost': all_costs,
-            'label': labels
+            'var_name': var_names + var_names_div,
+            'cost': all_costs + all_costs_div,
+            'label': labels + labels_div
         }
-        self._g.add_edges(edges, attributes=all_attrs)
-
+        self._g.add_edges(edges+edges_div, attributes=all_attrs)
 
     def _is_virtual_node(self, v):
         return (
