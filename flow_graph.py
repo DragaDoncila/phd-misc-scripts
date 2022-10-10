@@ -1,5 +1,6 @@
 from functools import partial
 import math
+import os
 from typing import Callable, List, Optional, Tuple, Union
 
 import numpy as np
@@ -15,8 +16,7 @@ import pandas as pd
 
 
 def euclidean_cost_func(source_node, dest_node):
-    # smaller distance should be bigger cost, so we take reciprocal
-    return 1 / np.linalg.norm(
+    return np.linalg.norm(
         np.asarray(dest_node["coords"]) - np.asarray(source_node["coords"])
     )
 
@@ -37,11 +37,9 @@ def min_pairwise_distance_cost(child_distances):
         distance_sum = distance_first_child + distance_second_child
         if distance_sum < min_dist:
             min_dist = distance_sum
-    # the smaller the distance, the bigger the prize
-    return 1 / min_dist
+    return min_dist
 
 
-# TODO: fix so box doesn't have to start at 0
 def dist_to_edge_cost_func(bounding_box_dimensions, node_coords):
     min_to_edge = math.inf
     box_mins = [dim[0] for dim in bounding_box_dimensions]
@@ -57,8 +55,7 @@ def dist_to_edge_cost_func(bounding_box_dimensions, node_coords):
             distance_to_min if distance_to_min < distance_to_max else distance_to_max
         )
         min_to_edge = min_to_edge if min_to_edge < smallest else smallest
-    # smaller distance should be bigger cost (to encourage taking it) so take reciprocal
-    return 1 / min_to_edge
+    return min_to_edge
 
 
 class FlowGraph:
@@ -397,7 +394,7 @@ class FlowGraph:
     def _get_objective_string(self):
         var_names = [edge["var_name"] for edge in self._g.es]
         edge_costs = [edge["cost"] for edge in self._g.es]
-        obj_str = "Maximize\n\t"
+        obj_str = "Minimize\n\t"
         for i in range(len(var_names)):
             var_cost_str = f"{edge_costs[i]} {var_names[i]} + "
             obj_str += var_cost_str
@@ -465,11 +462,19 @@ class FlowGraph:
         return flow_const
 
     def _get_flow(self):
-        source_outgoing_names = [
-            edge["var_name"] for edge in self._get_incident_edges(self.source)
-        ]
+        """Generate minimal flow through model - all nodes in first frame must appear.
+
+        Returns
+        -------
+        flow_str: str
+            string enforcing appearance flow into first frame
+        """
+        # get first frame vertices
+        first_frame_appearance = self._g.es(cost=0)
+        first_frame_appearance = list(filter(lambda e: f'a_{self.min_t}' in e['var_name'], first_frame_appearance))
+        appearance_names = [e['var_name'] for e in first_frame_appearance]
         flow_str = "\\Flow from source\n"
-        for edge in source_outgoing_names:
+        for edge in appearance_names:
             flow_str += f"\t{edge} = 1\n"
         return flow_str
 
@@ -478,7 +483,6 @@ class FlowGraph:
 
         1. We must have flow from appearance or migration before we have flow
             from division
-        2. If we have flow from division, we cannot have flow to target.
         """
         div_str = "\\Division constraints\n"
         potential_parents = self._g.vs(self._may_divide)
@@ -494,13 +498,13 @@ class FlowGraph:
             div_str += f"\t{incoming_sum} - {div_edge} >= 0\n"
 
             # if we have dv, we cannot flow into target
-            target_edge = outgoing(lambda e: "_t" in e["var_name"])[0]["var_name"]
-            delta_var = f"delta_{div_edge}"
-            self._binary_indicators.append(delta_var)
-            # TODO: make coefficient parameter?
-            div_str += f"\t{div_edge} - {delta_var} <= 0\n"
-            div_str += f"\t{div_edge} - 0.00001 {delta_var} >= 0\n"
-            div_str += f"\t{delta_var} + {target_edge} <= 1\n\n"
+            # target_edge = outgoing(lambda e: "_t" in e["var_name"])[0]["var_name"]
+            # delta_var = f"delta_{div_edge}"
+            # self._binary_indicators.append(delta_var)
+            # # TODO: make coefficient parameter?
+            # div_str += f"\t{div_edge} - {delta_var} <= 0\n"
+            # div_str += f"\t{div_edge} - 0.00001 {delta_var} >= 0\n"
+            # div_str += f"\t{delta_var} + {target_edge} <= 1\n\n"
 
         return div_str
 
@@ -508,7 +512,7 @@ class FlowGraph:
         cons_str = "Subject To\n"
         cons_str += self._get_flow_constraints()
         cons_str += self._get_division_constraints()
-        # cons_str += self._get_flow()
+        cons_str += self._get_flow()
         return cons_str
 
     def _get_bounds_string(self):
@@ -536,7 +540,7 @@ if __name__ == "__main__":
     import pandas as pd
     # coords = [(0, 50.0, 50.0), (0, 40, 50), (0, 30, 57), (1, 50, 52), (1, 38, 51), (1, 29, 60)]
     # pixel_vals = [1, 2, 3, 1, 2, 3]
-
+    model_pth = '/home/draga/PhD/code/experiments/preconfig/models/misc'
     coords = [
         (0, 50.0, 50.0),
         (0, 40, 50),
@@ -553,5 +557,5 @@ if __name__ == "__main__":
     pixel_vals = [1, 2, 3, 1, 2, 3, 1, 2, 3]
     graph = FlowGraph([(0, 0), (100, 100)], coords, min_t=0, max_t=2, pixel_vals=pixel_vals)
     igraph.plot(graph._g, layout=graph._g.layout('rt'))
-    # graph._to_lp('new_division_cost.lp')
+    graph._to_lp(os.path.join(model_pth, 'forced_flow_2.lp'))
     # print(cdist(coords[0:3], coords[3:6]))
