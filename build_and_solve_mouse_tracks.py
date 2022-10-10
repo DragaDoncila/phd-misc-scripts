@@ -9,11 +9,13 @@ from datetime import datetime
 
 ALL_TRACKS = '/home/draga/PhD/code/repos/misc-scripts/140521_late/140521_late_te_all_tracks_napari.csv'
 MODEL_PATH = '/home/draga/PhD/code/experiments/140521_late_te_all_tracks/models/'
+SOL_PATH = '/home/draga/PhD/code/experiments/140521_late_te_all_tracks/output/'
 OUT_PATH = '/home/draga/PhD/code/experiments/140521_late_te_all_tracks'
 
 current_datetime = datetime.now().strftime("%d-%b-%y_%H:%M")
 out_path = path.join(OUT_PATH, f'runtimes.csv')
 model_path = path.join(MODEL_PATH, f'{current_datetime}.lp')
+sol_path = path.join(SOL_PATH, f'{current_datetime}.sol')
 
 tracks_data = df.read_csv(ALL_TRACKS)
 tracks_coords = tracks_data[['t', 'z', 'y', 'x']]
@@ -40,6 +42,7 @@ model = gurobipy.read(model_path)
 model.optimize()
 model.printAttr('X')
 solve_duration = model.Runtime
+model.write(sol_path)
 
 if not path.exists(out_path):
     with open(out_path, 'w') as f:
