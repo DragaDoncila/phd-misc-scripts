@@ -39,6 +39,19 @@ def min_pairwise_distance_cost(child_distances):
             min_dist = distance_sum
     return min_dist
 
+def closest_neighbour_child_cost(parent_coords, child_coords):
+    min_dist = math.inf
+    for i, j in combinations(range(len(child_coords)), 2):
+        coords_i = child_coords[i]
+        coords_j = child_coords[j]
+        inter_child_dist = np.linalg.norm(coords_j - coords_i)
+        dist_i = np.linalg.norm(parent_coords - coords_i)
+        dist_j = np.linalg.norm(parent_coords - coords_j)
+        total_dist = inter_child_dist + min(dist_i, dist_j)
+        if total_dist < min_dist:
+            min_dist = total_dist
+    return min_dist
+
 
 def dist_to_edge_cost_func(bounding_box_dimensions, node_coords):
     min_to_edge = math.inf
@@ -133,7 +146,7 @@ class FlowGraph:
         """
         n = len(coords)
         if not pixel_vals:
-            pixel_vals = np.zeros(n, dtype=np.int8)
+            pixel_vals = np.arange(n, dtype=np.int8)
         pixel_vals = pd.Series(pixel_vals)
 
         coords_numpy = coords[self.spatial_cols].compute().to_numpy()
@@ -251,12 +264,12 @@ class FlowGraph:
             else:
                 cost_app = cost_target = real_node_costs[i]
             
-            var_names_app.append(f"e_a_{v['t']}{v['pixel_value'] or ''}")
+            var_names_app.append(f"e_a_{v['t']}{v['pixel_value']}")
             costs_app.append(cost_app)
             edges_app.append((self.appearance.index, v.index))
             labels_app.append(str(cost_app)[:4])
 
-            var_names_target.append(f"e_{v['t']}_{v['pixel_value' or '']}_t")
+            var_names_target.append(f"e_{v['t']}_{v['pixel_value']}_t")
             costs_target.append(cost_target)
             edges_target.append((v.index, self.target.index))
             labels_target.append(str(cost_target)[:4])
@@ -355,7 +368,8 @@ class FlowGraph:
 
                 division_edge = (self.division.index, parent_index)
                 # TODO: get better cost
-                cost = min_pairwise_distance_cost(nearest_distances[i])
+                cost = closest_neighbour_child_cost(parent_vertex['coords'], child_tree.data[nearest_indices[i]])
+                # cost = min_pairwise_distance_cost(nearest_distances[i])
                 var_name = f"e_d_{parent_vertex['t']}{parent_vertex['pixel_value' or '']}"
                 label = str(cost)[:5]
 
@@ -557,5 +571,5 @@ if __name__ == "__main__":
     pixel_vals = [1, 2, 3, 1, 2, 3, 1, 2, 3]
     graph = FlowGraph([(0, 0), (100, 100)], coords, min_t=0, max_t=2, pixel_vals=pixel_vals)
     igraph.plot(graph._g, layout=graph._g.layout('rt'))
-    graph._to_lp(os.path.join(model_pth, 'forced_flow_2.lp'))
+    graph._to_lp(os.path.join(model_pth, 'improved_div_cost.lp'))
     # print(cdist(coords[0:3], coords[3:6]))
