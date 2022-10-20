@@ -399,7 +399,7 @@ class FlowGraph:
         target_incoming_names = self._get_incident_edges(self.target)[0]["var_name"]
         source_outgoing_sum = self._get_var_sum_str(source_outgoing_names)
         target_incoming_sum = self._get_var_sum_str(target_incoming_names, neg="-")
-        network_capacity_str = f"{source_outgoing_sum} + {target_incoming_sum} = 0\n"
+        network_capacity_str = f"\tflow_all: {source_outgoing_sum} + {target_incoming_sum} = 0\n"
 
         # division & appearance
         appearance_incoming, appearance_outgoing = self._get_incident_edges(
@@ -408,7 +408,7 @@ class FlowGraph:
         appearance_incoming_sum = self._get_var_sum_str(appearance_incoming['var_name'])
         appearance_outgoing_sum = self._get_var_sum_str(appearance_outgoing['var_name'], neg="-")
         virtual_capacity_str = (
-            f"\t{appearance_incoming_sum} + {appearance_outgoing_sum} = 0\n"
+            f"\tflow_app: {appearance_incoming_sum} + {appearance_outgoing_sum} = 0\n"
         )
 
         if not self.migration_only:
@@ -416,23 +416,23 @@ class FlowGraph:
             division_incoming_sum = self._get_var_sum_str(division_incoming['var_name'])
             division_outgoing_sum = self._get_var_sum_str(division_outgoing["var_name"], neg="-")
             virtual_capacity_str += (
-                f"\t{division_incoming_sum} + {division_outgoing_sum} = 0\n"
+                f"\tflow_div: {division_incoming_sum} + {division_outgoing_sum} = 0\n"
             )
 
         # inner nodes
         inner_node_str = ""
         for t in range(self.min_t, self.max_t + 1):
             t_nodes = self._g.vs.select(t=t)
-            for node in t_nodes:
+            for i, node in enumerate(t_nodes):
                 incoming_edges, outgoing_edges = self._get_incident_edges(node)
                 incoming_names = incoming_edges['var_name']
                 outgoing_names = outgoing_edges['var_name']
 
                 incoming_sum = self._get_var_sum_str(incoming_names)
                 outgoing_sum = self._get_var_sum_str(outgoing_names, neg="-")
-                inner_node_str += f"\t{incoming_sum} + {outgoing_sum} = 0\n"
+                inner_node_str += f"\tflow_{t}.{i}: {incoming_sum} + {outgoing_sum} = 0\n"
             inner_node_str += "\n"
-        flow_const = f"\\Total network\n\t{network_capacity_str}\n\\Virtual nodes\n{virtual_capacity_str}\n\\Inner nodes\n{inner_node_str}"
+        flow_const = f"\\Total network\n{network_capacity_str}\n\\Virtual nodes\n{virtual_capacity_str}\n\\Inner nodes\n{inner_node_str}"
         return flow_const
 
     def _get_flow(self):
@@ -448,8 +448,8 @@ class FlowGraph:
         first_frame_appearance = list(filter(lambda e: f'a_{self.min_t}' in e['var_name'], first_frame_appearance))
         appearance_names = [e['var_name'] for e in first_frame_appearance]
         flow_str = "\\Flow from source\n"
-        for edge in appearance_names:
-            flow_str += f"\t{edge} = 1\n"
+        for i, edge in enumerate(appearance_names):
+            flow_str += f"\tforced_{i}: {edge} = 1\n"
         return flow_str
 
     def _get_division_constraints(self):
@@ -460,7 +460,7 @@ class FlowGraph:
         """
         div_str = "\\Division constraints\n"
         potential_parents = self._g.vs(self._may_divide)
-        for v in potential_parents:
+        for i, v in enumerate(potential_parents):
             incoming, outgoing = self._get_incident_edges(v)
             div_edge = incoming(lambda e: "e_d" in e["var_name"])[0]["var_name"]
             other_incoming_edges = incoming(lambda e: "e_d" not in e["var_name"])
@@ -469,7 +469,7 @@ class FlowGraph:
             )
 
             # must have appearance or immigration before we divide
-            div_str += f"\t{incoming_sum} - {div_edge} >= 0\n"
+            div_str += f"\tdiv_{i}: {incoming_sum} - {div_edge} >= 0\n"
 
         return div_str
 
@@ -519,5 +519,5 @@ if __name__ == "__main__":
     pixel_vals = [1, 2, 3, 1, 2, 3, 1, 2, 3]
     graph = FlowGraph([(0, 0), (100, 100)], coords, min_t=0, max_t=2, pixel_vals=pixel_vals, migration_only=True)
     igraph.plot(graph._g, layout=graph._g.layout('rt'))
-    graph._to_lp(os.path.join(model_pth, 'improved_div_cost.lp'))
+    graph._to_lp(os.path.join(model_pth, 'labelled_constraints.lp'))
     # print(cdist(coords[0:3], coords[3:6]))
