@@ -1,8 +1,8 @@
 import napari
 import dask.dataframe as df
 
-STACKED_NODES = '/home/doncilapopd@hhmi.org/phd-misc-scripts/140521_late/140521_late_te_all_tracks_stacked.csv'
-TRACKS = '/home/doncilapopd@hhmi.org/phd-misc-scripts/140521_late/140521_late_te_all_tracks_with_umap.csv'
+STACKED_NODES = '/home/draga/PhD/repos/misc-scripts/140521_late/140521_late_te_all_tracks_stacked.csv'
+TRACKS = '/home/draga/PhD/repos/misc-scripts/140521_late/140521_late_te_all_tracks_with_umap.csv'
 
 viewer = napari.Viewer()
 

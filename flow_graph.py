@@ -79,6 +79,7 @@ class FlowGraph:
         min_t=0,
         max_t=None,
         pixel_vals: List[int] = None,
+        migration_only: bool = False
     ) -> None:
         """Generate a FlowGraph from the coordinates with given pixel values
 
@@ -102,21 +103,22 @@ class FlowGraph:
             from max value of first coordinate of each object in coords.
         pixel_vals : List[int], optional
             pixel value of each object at coordinate, by default None
+        migration_only: bool, optional
+            Whether the model ignores divisions or not, by default False
         """
         self.min_t = min_t or coords['t'].min()
         self.max_t = max_t or coords['t'].max()
         self.t = self.max_t - self.min_t + 1
         self.im_dim = im_dim
+        self.migration_only = migration_only
         # TODO: we basically immediately instantiate the dask df - let's just take pandas from the getgo
         self.spatial_cols = ['y', 'x']
         if 'z' in coords.columns:
             self.spatial_cols.insert(0, 'z')
         if not isinstance(coords, df.DataFrame):
             coords = df.from_pandas(coords, chunksize=10000)
-
         self._g = self._init_nodes(coords, pixel_vals)
         self._kdt_dict = self._build_trees()
-        self._binary_indicators = []
         self._init_edges()
 
     
@@ -146,7 +148,7 @@ class FlowGraph:
         """
         n = len(coords)
         if not pixel_vals:
-            pixel_vals = np.arange(n, dtype=np.int8)
+            pixel_vals = np.arange(n, dtype=np.uint16)
         pixel_vals = pd.Series(pixel_vals)
 
         coords_numpy = coords[self.spatial_cols].compute().to_numpy()
@@ -189,18 +191,6 @@ class FlowGraph:
             is_division=False,
         )
 
-        self.division = g.add_vertex(
-            name="division",
-            label="division",
-            coords=None,
-            pixel_value=None,
-            t=-1,
-            is_source=False,
-            is_target=False,
-            is_appearance=False,
-            is_division=True,
-        )
-
         self.target = g.add_vertex(
             name="target",
             label="target",
@@ -212,6 +202,19 @@ class FlowGraph:
             is_appearance=False,
             is_division=False,
         )
+
+        if not self.migration_only:
+            self.division = g.add_vertex(
+                name="division",
+                label="division",
+                coords=None,
+                pixel_value=None,
+                t=-1,
+                is_source=False,
+                is_target=False,
+                is_appearance=False,
+                is_division=True,
+            )
 
         return g
 
@@ -263,12 +266,12 @@ class FlowGraph:
             else:
                 cost_app = cost_target = real_node_costs[i]
             
-            var_names_app.append(f"e_a_{v['t']}{v['pixel_value']}")
+            var_names_app.append(f"e_a_{v['t']}.{v['pixel_value']}")
             costs_app.append(cost_app)
             edges_app.append((self.appearance.index, v.index))
             labels_app.append(str(cost_app)[:4])
 
-            var_names_target.append(f"e_{v['t']}_{v['pixel_value']}_t")
+            var_names_target.append(f"e_{v['t']}.{v['pixel_value']}_t")
             costs_target.append(cost_target)
             edges_target.append((v.index, self.target.index))
             labels_target.append(str(cost_target)[:4])
@@ -297,7 +300,8 @@ class FlowGraph:
         all_costs = []
         labels = []
 
-        self._g.add_edge(self.source, self.division, cost=0, var_name="e_sd", label=0)
+        if not self.migration_only:
+            self._g.add_edge(self.source, self.division, cost=0, var_name="e_sd", label=0)
         edges_div = []
         all_costs_div = []
         var_names_div = []
@@ -324,7 +328,7 @@ class FlowGraph:
                 
                 current_edges = [(src.index, dest_index) for dest_index in dest_vertex_indices]
                 current_costs = dest_distances[i]
-                current_var_names = [f"e_{src['t']}{src['pixel_value']}_{dest['t']}{dest['pixel_value']}" for dest in dest_vertices]
+                current_var_names = [f"e_{src['t']}.{src['pixel_value']}_{dest['t']}.{dest['pixel_value']}" for dest in dest_vertices]
                 current_labels = [str(cost)[:5] for cost in current_costs]
 
                 edges.extend(current_edges)
@@ -332,11 +336,12 @@ class FlowGraph:
                 labels.extend(current_labels)
                 all_costs.extend(current_costs)
 
+                if self.migration_only:
+                    continue
+
                 division_edge = (self.division.index, src.index)
-                # TODO: get better cost
                 cost_div = closest_neighbour_child_cost(src['coords'], dest_tree.data[dest_indices[i]])
-                # cost = min_pairwise_distance_cost(nearest_distances[i])
-                var_name_div = f"e_d_{src['t']}{src['pixel_value']}"
+                var_name_div = f"e_d_{src['t']}.{src['pixel_value']}"
                 label_div = str(cost_div)[:5]
 
                 edges_div.append(division_edge)
@@ -397,20 +402,22 @@ class FlowGraph:
         network_capacity_str = f"{source_outgoing_sum} + {target_incoming_sum} = 0\n"
 
         # division & appearance
-        division_incoming, division_outgoing = self._get_incident_edges(self.division)
         appearance_incoming, appearance_outgoing = self._get_incident_edges(
             self.appearance
         )
-        division_incoming_sum = self._get_var_sum_str(division_incoming['var_name'])
-        division_outgoing_sum = self._get_var_sum_str(division_outgoing["var_name"], neg="-")
         appearance_incoming_sum = self._get_var_sum_str(appearance_incoming['var_name'])
         appearance_outgoing_sum = self._get_var_sum_str(appearance_outgoing['var_name'], neg="-")
         virtual_capacity_str = (
-            f"\t{division_incoming_sum} + {division_outgoing_sum} = 0\n"
-        )
-        virtual_capacity_str += (
             f"\t{appearance_incoming_sum} + {appearance_outgoing_sum} = 0\n"
         )
+
+        if not self.migration_only:
+            division_incoming, division_outgoing = self._get_incident_edges(self.division)
+            division_incoming_sum = self._get_var_sum_str(division_incoming['var_name'])
+            division_outgoing_sum = self._get_var_sum_str(division_outgoing["var_name"], neg="-")
+            virtual_capacity_str += (
+                f"\t{division_incoming_sum} + {division_outgoing_sum} = 0\n"
+            )
 
         # inner nodes
         inner_node_str = ""
@@ -464,21 +471,13 @@ class FlowGraph:
             # must have appearance or immigration before we divide
             div_str += f"\t{incoming_sum} - {div_edge} >= 0\n"
 
-            # if we have dv, we cannot flow into target
-            # target_edge = outgoing(lambda e: "_t" in e["var_name"])[0]["var_name"]
-            # delta_var = f"delta_{div_edge}"
-            # self._binary_indicators.append(delta_var)
-            # # TODO: make coefficient parameter?
-            # div_str += f"\t{div_edge} - {delta_var} <= 0\n"
-            # div_str += f"\t{div_edge} - 0.00001 {delta_var} >= 0\n"
-            # div_str += f"\t{delta_var} + {target_edge} <= 1\n\n"
-
         return div_str
 
     def _get_constraints_string(self):
         cons_str = "Subject To\n"
         cons_str += self._get_flow_constraints()
-        cons_str += self._get_division_constraints()
+        if not self.migration_only:
+            cons_str += self._get_division_constraints()
         cons_str += self._get_flow()
         return cons_str
 
@@ -489,16 +488,12 @@ class FlowGraph:
             bounds_str += f'\t0 <= {edge["var_name"]} <= 1\n'
         return bounds_str
 
-    def _get_binary_var_str(self):
-        return "Binary\n\t" + " ".join(self._binary_indicators)
-
     def _to_lp(self, path):
         obj_str = self._get_objective_string()
         constraints_str = self._get_constraints_string()
         bounds_str = self._get_bounds_string()
-        binary_vars = self._get_binary_var_str()
 
-        total_str = f"{obj_str}\n{constraints_str}\n{bounds_str}\n{binary_vars}"
+        total_str = f"{obj_str}\n{constraints_str}\n{bounds_str}"
         with open(path, "w") as f:
             f.write(total_str)
 
@@ -522,7 +517,7 @@ if __name__ == "__main__":
     coords = pd.DataFrame(coords, columns=['t', 'y', 'x'])
 
     pixel_vals = [1, 2, 3, 1, 2, 3, 1, 2, 3]
-    graph = FlowGraph([(0, 0), (100, 100)], coords, min_t=0, max_t=2, pixel_vals=pixel_vals)
+    graph = FlowGraph([(0, 0), (100, 100)], coords, min_t=0, max_t=2, pixel_vals=pixel_vals, migration_only=True)
     igraph.plot(graph._g, layout=graph._g.layout('rt'))
     graph._to_lp(os.path.join(model_pth, 'improved_div_cost.lp'))
     # print(cdist(coords[0:3], coords[3:6]))
