@@ -1,0 +1,5 @@
+napari[all]
+gurobipy
+stardist
+csbdeep
+igraph

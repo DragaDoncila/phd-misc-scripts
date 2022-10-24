@@ -170,7 +170,7 @@ class FlowGraph:
         self.source = g.add_vertex(
             name="source",
             label="source",
-            coords=None,
+            coords=np.asarray((-5, -2)),
             pixel_value=None,
             t=-1,
             is_source=True,
@@ -182,7 +182,7 @@ class FlowGraph:
         self.appearance = g.add_vertex(
             name="appearance",
             label="appearance",
-            coords=None,
+            coords=np.asarray((-1, -1)),
             pixel_value=None,
             t=-1,
             is_source=False,
@@ -194,7 +194,7 @@ class FlowGraph:
         self.target = g.add_vertex(
             name="target",
             label="target",
-            coords=None,
+            coords=np.asarray((-1, -1)),
             pixel_value=None,
             t=self.max_t + 1,  # max frame index is max_t
             is_source=False,
@@ -207,7 +207,8 @@ class FlowGraph:
             self.division = g.add_vertex(
                 name="division",
                 label="division",
-                coords=None,
+                # TODO: will break for 4d maybe
+                coords=np.asarray((-1, -5)),
                 pixel_value=None,
                 t=-1,
                 is_source=False,
