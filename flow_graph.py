@@ -1,6 +1,7 @@
 from functools import partial
 import math
 import os
+import re
 from typing import Callable, List, Optional, Tuple, Union
 
 import numpy as np
@@ -72,6 +73,12 @@ def dist_to_edge_cost_func(bounding_box_dimensions, node_coords):
 
 
 class FlowGraph:
+
+    APPEARANCE_EDGE_REGEX = re.compile(r"e_a_[0-9]+\.[0-9]+")
+    EXIT_EDGE_REGEX = re.compile(r"e_[0-9]+\.[0-9]+_t")
+    DIVISION_EDGE_REGEX = re.compile(r"e_d_[0-9]+\.[0-9]+")
+    MIGRATION_EDGE_REGEX = re.compile(r"e_[0-9]+\.[0-9]+_[0-9]+\.[0-9]+")
+
     def __init__(
         self,
         im_dim: Tuple[int],
@@ -432,26 +439,27 @@ class FlowGraph:
                 incoming_sum = self._get_var_sum_str(incoming_names)
                 outgoing_sum = self._get_var_sum_str(outgoing_names, neg="-")
                 inner_node_str += f"\tflow_{t}.{i}: {incoming_sum} + {outgoing_sum} = 0\n"
+                inner_node_str += f"\tforced_{t}.{i}: {incoming_sum} >= 1\n"
             inner_node_str += "\n"
         flow_const = f"\\Total network\n{network_capacity_str}\n\\Virtual nodes\n{virtual_capacity_str}\n\\Inner nodes\n{inner_node_str}"
         return flow_const
 
-    def _get_flow(self):
-        """Generate minimal flow through model - all nodes in first frame must appear.
+    # def _get_flow(self):
+    #     """Generate minimal flow through model - all nodes in first frame must appear.
 
-        Returns
-        -------
-        flow_str: str
-            string enforcing appearance flow into first frame
-        """
-        # get first frame vertices
-        first_frame_appearance = self._g.es(cost=0)
-        first_frame_appearance = list(filter(lambda e: f'a_{self.min_t}' in e['var_name'], first_frame_appearance))
-        appearance_names = [e['var_name'] for e in first_frame_appearance]
-        flow_str = "\\Flow from source\n"
-        for i, edge in enumerate(appearance_names):
-            flow_str += f"\tforced_{i}: {edge} = 1\n"
-        return flow_str
+    #     Returns
+    #     -------
+    #     flow_str: str
+    #         string enforcing appearance flow into first frame
+    #     """
+    #     # get first frame vertices
+    #     first_frame_appearance = self._g.es(cost=0)
+    #     first_frame_appearance = list(filter(lambda e: f'a_{self.min_t}' in e['var_name'], first_frame_appearance))
+    #     appearance_names = [e['var_name'] for e in first_frame_appearance]
+    #     flow_str = "\\Flow from source\n"
+    #     for i, edge in enumerate(appearance_names):
+    #         flow_str += f"\tforced_{i}: {edge} = 1\n"
+    #     return flow_str
 
     def _get_division_constraints(self):
         """Constrain conditions required for division to occur.
@@ -479,7 +487,7 @@ class FlowGraph:
         cons_str += self._get_flow_constraints()
         if not self.migration_only:
             cons_str += self._get_division_constraints()
-        cons_str += self._get_flow()
+        # cons_str += self._get_flow()
         return cons_str
 
     def _get_bounds_string(self):
