@@ -37,12 +37,14 @@ if not path.exists(model_path):
 else:
     write_duration = 0
 
-# print("Solving model...")
-# model = gurobipy.read(model_path)
-# model.optimize()
+print("Solving model...")
+model = gurobipy.read(model_path)
+model.Params.method = 1
+model.Params.presolve  = 2
+model.optimize()
 # model.printAttr('X')
-# solve_duration = model.Runtime
-# model.write(sol_path)
+solve_duration = model.Runtime
+model.write(sol_path)
 solve_duration = 0
 
 if not path.exists(out_path):
