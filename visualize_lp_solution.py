@@ -1,3 +1,4 @@
+from ctc_timings import get_im_centers
 from functools import partial
 from string import whitespace
 import napari
@@ -10,16 +11,12 @@ from napari.layers import Graph
 from tifffile import TiffFile
 import glob
 
-DS_NAME = "Fluo-N2DL-HeLa/01/"
-CENTERS_PATH = os.path.join(
-    "/home/draga/PhD/code/repos/misc-scripts/ctc/", DS_NAME, "centers.csv"
-)
+DS_NAME = "Fluo-N2DL-HeLa/01_GT/"
 OUTPUT_PATH = os.path.join("/home/draga/PhD/code/experiments/ctc/", DS_NAME, "output/")
-SOLUTION_PATH = os.path.join(OUTPUT_PATH, "24Oct22_1647.sol")
+SOLUTION_PATH = os.path.join(OUTPUT_PATH, "25Nov22_1205.sol")
 
-# /home/draga/PhD/code/experiments/ctc/Fluo-N2DL-HeLa/01/output/24Oct22_1647.csv
 EDGE_CSV_PATH = os.path.join(OUTPUT_PATH, "24Oct22_1647.csv")
-DATA_PATH = os.path.join("/home/draga/PhD/data/cell_tracking_challenge/", DS_NAME)
+DATA_PATH = os.path.join("/home/draga/PhD/data/cell_tracking_challenge/", DS_NAME, 'TRA/')
 
 def peek(im_file):
     with TiffFile(im_file) as im:
@@ -69,11 +66,7 @@ def get_colours_from_node(names, v):
 
 if __name__ == '__main__':
     # make FlowGraph from centers
-    node_df = pd.read_csv(CENTERS_PATH)
-    coords = node_df[["t", "y", "x"]]
-    min_t = 0
-    max_t = coords["t"].max()
-    corners = [(0, 0), (1024, 1024)]
+    coords, min_t, max_t, corners = get_im_centers(DATA_PATH)
     graph = FlowGraph(corners, coords, min_t=min_t, max_t=max_t)
 
     # select just the edges (and their adjacent nodes) from the solution

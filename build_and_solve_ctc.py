@@ -4,10 +4,12 @@ import time
 from flow_graph import FlowGraph
 import pandas as pd
 import gurobipy
+from gurobipy import GRB
 
 DS_NAME = 'Fluo-N2DL-HeLa/01/'
 CENTERS_PATH = os.path.join('/home/draga/PhD/code/repos/misc-scripts/ctc/', DS_NAME, 'centers.csv')
 
+MIGRATION_ONLY = True
 OUT_ROOT = '/home/draga/PhD/code/experiments/ctc/'
 MODEL_ROOT = os.path.join(OUT_ROOT, DS_NAME, 'models/')
 SOL_ROOT = os.path.join(OUT_ROOT, DS_NAME, 'output/')
@@ -28,7 +30,7 @@ corners = [(0, 0), (1024, 1024)]
 
 # load into flow graph
 start = time.time()
-graph = FlowGraph(corners, coords, min_t=min_t, max_t=max_t)
+graph = FlowGraph(corners, coords, min_t=min_t, max_t=max_t, migration_only=MIGRATION_ONLY)
 end = time.time()
 build_duration = end - start
 print("Build duration: ", build_duration)
@@ -44,16 +46,17 @@ else:
 
 print("Solving model...")
 model = gurobipy.read(model_path)
+model.Params.TimeLimit = 300 # 5 minute timeout
 model.optimize()
-# model.printAttr('X')
+
 solve_duration = model.Runtime
 model.write(sol_path)
 # solve_duration = 0
 
 if not os.path.exists(out_path):
     with open(out_path, 'w') as f:
-        header = 'ID,BUILD_MODEL,WRITE_MODEL,SOLVE_MODEL\n'
+        header = 'ID,BUILD_MODEL,WRITE_MODEL,SOLVE_MODEL,SOLVE_STATUS,MIGRATION_ONLY\n'
         f.write(header)
 with open(out_path, 'a') as f:
-    info = f'{current_datetime},{build_duration},{write_duration},{solve_duration}\n'
+    info = f'{current_datetime},{build_duration},{write_duration},{solve_duration},{int(MIGRATION_ONLY)}\n'
     f.write(info)

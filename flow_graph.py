@@ -172,7 +172,7 @@ class FlowGraph:
             'is_division': false_arr,
         }
         g = igraph.Graph(directed=True)
-        g.add_vertices(len(coords), all_attrs_dict)
+        g.add_vertices(n, all_attrs_dict)
 
         self.source = g.add_vertex(
             name="source",
