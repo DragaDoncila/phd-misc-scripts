@@ -1,3 +1,5 @@
+from cProfile import label
+import sys
 from ctc_timings import get_im_centers
 from functools import partial
 from string import whitespace
@@ -10,14 +12,16 @@ from napari_graph import DirectedGraph
 from napari.layers import Graph
 from tifffile import TiffFile
 import glob
+import igraph
+
 
 DS_NAME = "Fluo-N2DL-HeLa/01_GT/"
 OUTPUT_PATH = os.path.join("/home/draga/PhD/code/experiments/ctc/", DS_NAME, "output/")
-SOLUTION_PATH = os.path.join(OUTPUT_PATH, "25Nov22_1205.sol")
+SOLUTION_PATH = os.path.join(OUTPUT_PATH, "25Nov22_1255.sol")
 
 EDGE_CSV_PATH = os.path.join(OUTPUT_PATH, "24Oct22_1647.csv")
-DATA_PATH = os.path.join("/home/draga/PhD/data/cell_tracking_challenge/", DS_NAME, 'TRA/')
-
+GT_PATH = os.path.join("/home/draga/PhD/data/cell_tracking_challenge/", DS_NAME, 'TRA/')
+IM_PATH = os.path.join("/home/draga/PhD/data/cell_tracking_challenge/", DS_NAME[:-4]+"/")
 def peek(im_file):
     with TiffFile(im_file) as im:
         im_shape = im.pages[0].shape
@@ -63,11 +67,45 @@ def get_colours_from_node(names, v):
 
     return face_colour, edge_colour
 
+def get_gt_graph(coords, graph, gt_path):
+    graph._g.vs['truth'] = coords['label']
+    edge_list = []
+    for label_val in range(coords['label'].min(), coords['label'].max()):
+        gt_points = coords[coords.label == label_val].sort_values(by='t')
+        track_edges = [(gt_points.index.values[i], gt_points.index.values[i+1]) for i in range(0, len(gt_points)-1)]
+        edge_list.extend(track_edges)
+
+    man_track = pd.read_csv(os.path.join(gt_path, 'man_track.txt'), sep=' ', header=None)
+    man_track.columns = ['current', 'start_t', 'end_t', 'parent']
+    child_tracks = man_track[man_track.parent != 0]
+    for index, row in child_tracks.iterrows():
+        parent_id = row['parent']
+        parent_end_t = man_track[man_track.current == parent_id]['end_t'].values[0]
+        parent_coords = coords[(coords.label == parent_id)][coords.t == parent_end_t]
+        child_coords = coords[(coords.label == row['current']) & (coords.t == row['start_t'])]
+        edge_list.append((parent_coords.index.values[0], child_coords.index.values[0]))
+    return edge_list
+
 
 if __name__ == '__main__':
     # make FlowGraph from centers
-    coords, min_t, max_t, corners = get_im_centers(DATA_PATH)
+    coords, min_t, max_t, corners = get_im_centers(GT_PATH)
     graph = FlowGraph(corners, coords, min_t=min_t, max_t=max_t)
+    # index in coords is index of vertex in graph
+    gt_graph = get_gt_graph(coords, graph, GT_PATH)
+    points = coords[['t', 'y', 'x']].to_numpy()
+    vis_graph = DirectedGraph(edges=gt_graph, coords=points)
+    layer = Graph(
+        vis_graph, 
+        out_of_slice_display=True,
+        ndim=3, 
+        scale=(5, 1, 1), 
+        size=5, 
+    )
+    viewer = napari.Viewer()
+    viewer.add_layer(layer)
+    napari.run()
+    sys.exit(0) 
 
     # select just the edges (and their adjacent nodes) from the solution
     # read edges with a 1 into a set
@@ -88,6 +126,7 @@ if __name__ == '__main__':
     # set the flows of all the edges
     used_edge_names = set(edge_flows.keys())
     graph._g.es.set_attribute_values('flow', [edge_flows.get(var_name, 0) for var_name in graph._g.es['var_name']])
+
     # edge_names = list(graph._g.es['var_name'])
     # flow = list(graph._g.es['flow'])
     # parent_indices = [e.source for e in graph._g.es]
@@ -118,7 +157,7 @@ if __name__ == '__main__':
     vis_graph = DirectedGraph(edges=edge_indices, coords=coords)
 
     # read actual image data
-    ims = load_tiff_frames(DATA_PATH)
+    ims = load_tiff_frames(IM_PATH)
     # padded_ims = np.stack([np.zeros_like(ims[0]), *ims, np.zeros_like(ims[0])])
 
     # add & run
