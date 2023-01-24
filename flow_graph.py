@@ -172,12 +172,12 @@ class FlowGraph:
             'is_division': false_arr,
         }
         g = igraph.Graph(directed=True)
-        g.add_vertices(len(coords), all_attrs_dict)
+        g.add_vertices(n, all_attrs_dict)
 
         self.source = g.add_vertex(
             name="source",
             label="source",
-            coords=np.asarray((-5, -2)),
+            coords=np.asarray((0, 0)),
             pixel_value=None,
             t=-1,
             is_source=True,
@@ -189,7 +189,7 @@ class FlowGraph:
         self.appearance = g.add_vertex(
             name="appearance",
             label="appearance",
-            coords=np.asarray((-1, -1)),
+            coords=np.asarray((0, 0)),
             pixel_value=None,
             t=-1,
             is_source=False,
@@ -201,7 +201,7 @@ class FlowGraph:
         self.target = g.add_vertex(
             name="target",
             label="target",
-            coords=np.asarray((-1, -1)),
+            coords=np.asarray((0, 0)),
             pixel_value=None,
             t=self.max_t + 1,  # max frame index is max_t
             is_source=False,
@@ -215,7 +215,7 @@ class FlowGraph:
                 name="division",
                 label="division",
                 # TODO: will break for 4d maybe
-                coords=np.asarray((-1, -5)),
+                coords=np.asarray((0, 0)),
                 pixel_value=None,
                 t=-1,
                 is_source=False,

@@ -45,8 +45,7 @@ def get_centers(segmentation):
     centers_of_mass = []
     for i in range(n_frames):
         current_frame = segmentation[i]
-        labels = label(current_frame)[0]
-        current_centers = center_of_mass(current_frame, labels=labels, index=cell_vals[i])
+        current_centers = center_of_mass(current_frame, labels=current_frame, index=cell_vals[i])
         centers_of_mass.append(current_centers)
     return centers_of_mass
 
