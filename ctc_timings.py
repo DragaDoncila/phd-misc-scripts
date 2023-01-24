@@ -26,6 +26,10 @@ def get_im_centers(im_pth):
     center_coords = np.asarray(get_point_coords(centers))
     coords_df = pd.DataFrame(center_coords, columns=['t', 'y', 'x'])
     coords_df['t'] = coords_df['t'].astype(int)
+    labels = []
+    for coord in center_coords:
+        labels.append(im_arr[tuple(coord.astype(int))])
+    coords_df['label'] = labels
     min_t = 0
     max_t = im_arr.shape[0]-1
     corners = [(0, 0), im_arr.shape[1:]]
