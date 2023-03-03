@@ -7,8 +7,6 @@ from typing import Callable, List, Optional, Tuple, Union
 import numpy as np
 import igraph
 from itertools import combinations, product
-import dask.dataframe as df
-import dask.array as da
 
 from scipy.spatial.distance import cdist
 from scipy.spatial import KDTree
@@ -82,7 +80,7 @@ class FlowGraph:
     def __init__(
         self,
         im_dim: Tuple[int],
-        coords: 'dask.dataframe.DataFrame',
+        coords: 'pandas.DataFrame',
         min_t=0,
         max_t=None,
         pixel_vals: List[int] = None,
@@ -118,12 +116,9 @@ class FlowGraph:
         self.t = self.max_t - self.min_t + 1
         self.im_dim = im_dim
         self.migration_only = migration_only
-        # TODO: we basically immediately instantiate the dask df - let's just take pandas from the getgo
         self.spatial_cols = ['y', 'x']
         if 'z' in coords.columns:
             self.spatial_cols.insert(0, 'z')
-        if not isinstance(coords, df.DataFrame):
-            coords = df.from_pandas(coords, chunksize=10000)
         self._g = self._init_nodes(coords, pixel_vals)
         self._kdt_dict = self._build_trees()
         self._init_edges()
@@ -158,9 +153,9 @@ class FlowGraph:
             pixel_vals = np.arange(n, dtype=np.uint16)
         pixel_vals = pd.Series(pixel_vals)
 
-        coords_numpy = coords[self.spatial_cols].compute().to_numpy()
+        coords_numpy = coords[self.spatial_cols].to_numpy()
         false_arr = np.broadcast_to(False, n)
-        times = coords['t'].compute()
+        times = coords['t']
         all_attrs_dict = {
             'label': times.astype(str).str.cat(pixel_vals.astype(str), sep='_'),
             'coords': coords_numpy,
@@ -323,7 +318,7 @@ class FlowGraph:
             dest_t = source_t + 1
             source_nodes = self._g.vs(t=source_t)
 
-            source_coords = da.asarray(source_nodes['coords'])
+            source_coords = np.asarray(source_nodes['coords'])
             dest_tree = self._kdt_dict[dest_t]['tree']
             # TODO: parameterize the closest neighbours
             dest_distances, dest_indices = dest_tree.query(source_coords, k=10 if dest_tree.n > 10 else dest_tree.n - 1)

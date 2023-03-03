@@ -9,7 +9,7 @@ from gurobipy import GRB
 DS_NAME = 'Fluo-N2DL-HeLa/01/'
 CENTERS_PATH = os.path.join('/home/draga/PhD/code/repos/misc-scripts/ctc/', DS_NAME, 'centers.csv')
 
-MIGRATION_ONLY = True
+MIGRATION_ONLY = False
 OUT_ROOT = '/home/draga/PhD/code/experiments/ctc/'
 MODEL_ROOT = os.path.join(OUT_ROOT, DS_NAME, 'models/')
 SOL_ROOT = os.path.join(OUT_ROOT, DS_NAME, 'output/')
@@ -26,7 +26,7 @@ node_df = pd.read_csv(CENTERS_PATH)
 coords = node_df[['t', 'y', 'x']]
 min_t = 0
 max_t = coords['t'].max()
-corners = [(0, 0), (1024, 1024)]
+corners = [(0, 0), (700, 1100)]
 
 # load into flow graph
 start = time.time()

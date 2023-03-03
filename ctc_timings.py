@@ -17,11 +17,10 @@ from ims_to_graph import load_tiff_frames, get_centers, get_point_coords
 DATA_ROOT = '/home/draga/PhD/data/cell_tracking_challenge/'
 OUT_ROOT = '/home/draga/PhD/code/experiments/ctc/'
 DS_NAME = 'Fluo-N2DL-HeLa/'
-SEQS = ['01_GT', '02_GT']
+SEQS = ['02_ST', '02_GT']
 MIGRATION_ONLY = False
 
-def get_im_centers(im_pth):
-    im_arr = load_tiff_frames(im_pth)
+def extract_im_centers(im_arr):
     centers = get_centers(im_arr)
     center_coords = np.asarray(get_point_coords(centers))
     coords_df = pd.DataFrame(center_coords, columns=['t', 'y', 'x'])
@@ -33,6 +32,11 @@ def get_im_centers(im_pth):
     min_t = 0
     max_t = im_arr.shape[0]-1
     corners = [(0, 0), im_arr.shape[1:]]
+    return coords_df, min_t, max_t, corners
+
+def get_im_centers(im_pth):
+    im_arr = load_tiff_frames(im_pth)
+    coords_df, min_t, max_t, corners = extract_im_centers(im_arr)
     return coords_df, min_t, max_t, corners
 
 def get_graph(coords, min_t, max_t, corners):
@@ -67,8 +71,8 @@ def solve_model(model_path, sol_path):
 
 if __name__ == '__main__':
     for seq in SEQS:
-        for _ in tqdm(range(50)):
-            im_dir = os.path.join(DATA_ROOT, DS_NAME, seq, 'TRA/')
+        for _ in tqdm(range(1)):
+            im_dir = os.path.join(DATA_ROOT, DS_NAME, seq, 'TRA/' if seq.endswith('GT') else 'SEG/')
             model_root = os.path.join(OUT_ROOT, DS_NAME, seq, 'models/')
             sol_root = os.path.join(OUT_ROOT, DS_NAME, seq, 'output/')
             os.makedirs(model_root, exist_ok=True)

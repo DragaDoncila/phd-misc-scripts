@@ -3,3 +3,5 @@ gurobipy
 stardist
 csbdeep
 igraph
+typer
+scikit-image
