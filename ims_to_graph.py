@@ -4,6 +4,8 @@ from tifffile import TiffFile
 import napari
 import h5py
 from scipy.ndimage import center_of_mass, label
+from skimage.measure import regionprops
+from skimage.graph import pixel_graph, central_pixel
 # from generate_ellipses import FlowGraph
 from flow_graph import FlowGraph
 
@@ -37,7 +39,22 @@ def load_h5(im_pth=H5_PTH, group='volume', key='data'):
     with h5py.File(im_pth, "r") as f:
         print(f)
         dataset = np.squeeze(f[group][key][...])
-    return dataset
+    return dataset    
+
+def get_real_center(prop):
+    if prop.solidity > 0.9:
+        return prop.centroid
+    
+    # shape is too convex to use centroid, get center from pixelgraph
+    region = prop.image
+    g, nodes = pixel_graph(region, connectivity=2)
+    medoid_offset, _ = central_pixel(
+            g, nodes=nodes, shape=region.shape, partition_size=100
+            )
+    medoid_offset = np.asarray(medoid_offset)
+    top_left = np.asarray(prop.bbox[:region.ndim])
+    medoid = tuple(top_left + medoid_offset)
+    return medoid
 
 def get_centers(segmentation):
     n_frames = segmentation.shape[0]
@@ -45,7 +62,9 @@ def get_centers(segmentation):
     centers_of_mass = []
     for i in range(n_frames):
         current_frame = segmentation[i]
-        current_centers = center_of_mass(current_frame, labels=current_frame, index=cell_vals[i])
+        # regionprops the frame
+        props = regionprops(current_frame)
+        current_centers = [get_real_center(prop) for prop in props]
         centers_of_mass.append(current_centers)
     return centers_of_mass
 
