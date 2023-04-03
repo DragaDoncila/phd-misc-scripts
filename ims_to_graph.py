@@ -42,7 +42,7 @@ def load_h5(im_pth=H5_PTH, group='volume', key='data'):
     return dataset    
 
 def get_real_center(prop):
-    if prop.solidity > 0.9:
+    if prop.solidity > 0.85:
         return prop.centroid
     
     # shape is too convex to use centroid, get center from pixelgraph
@@ -58,11 +58,9 @@ def get_real_center(prop):
 
 def get_centers(segmentation):
     n_frames = segmentation.shape[0]
-    cell_vals = [np.unique(frame)[1:] for frame in segmentation]
     centers_of_mass = []
     for i in range(n_frames):
         current_frame = segmentation[i]
-        # regionprops the frame
         props = regionprops(current_frame)
         current_centers = [get_real_center(prop) for prop in props]
         centers_of_mass.append(current_centers)

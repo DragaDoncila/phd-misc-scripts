@@ -12,6 +12,7 @@ from ctc_timings import extract_im_centers
 from flow_graph import FlowGraph
 from ctc_edge_accuracy import load_lp_solution
 from skimage import io
+import networkx as nx
 
 MEASURE_ROOT = "/home/draga/PhD/software/ctc_evaluation/Linux"
 DET_SCORE = os.path.join(MEASURE_ROOT, "DETMeasure")
@@ -35,8 +36,7 @@ def load_solution_graph(seg_ims, solution_path, preserve_inconsistencies=False):
 
     # we keep the graph structure here so we can dfs search it easily
     # TODO: should just delete edges with no flow set
-    graph._g.delete_edges()
-    graph._g.add_edges(solution_edges)
+    graph._g.delete_edges(graph._g.es.select(flow_eq=0))
     return coords, graph
 
 def assign_track_ids(coords, graph, preserve_inconsistencies=False):
@@ -57,11 +57,11 @@ def assign_track_ids(coords, graph, preserve_inconsistencies=False):
             if coords.loc[[v.index], ["track_id"]].values[0] != -1:
                 # print(f'Skipping already visited: {v.index}')
                 continue
-            # this vertex has a parent so we need to get its parent connection
             if (nparents := v.degree("in")) > 1:
                 if v.index not in seen_merge:
                     merge_info += f'Vertex {v.index} has {nparents} incoming edges: {graph._g.incident(v, "in")}\n'
                     seen_merge.add(v.index)
+            # this vertex has a parent so we need to get its parent connection
             if parent:
                 parent_id = coords.loc[[parent.index], ["track_id"]].values[0]
                 n_children = parent.degree("out")
@@ -182,6 +182,15 @@ def get_inter_track_edges(res_track, coords):
     })
     return it_edges
 
+def delete_unused_attributes(i_graph, attrs, use_edges=False):
+    if use_edges:
+        for attr in attrs:
+            del(i_graph.es[attr])
+        return
+
+    for attr in attrs:
+        del(i_graph.vs[attr])
+
 @app.command()
 def seg(data_dir, seq):
     # would love not to have to sudo here...
@@ -237,17 +246,43 @@ def convert_st(data_dir, seq, solution_path, preserve_inconsistencies=False):
     seg_st_path = os.path.join(data_dir, f"{seq}_ST", "SEG/")
     seg_ims = load_tiff_frames(seg_st_path)
     coords, graph = load_solution_graph(seg_ims, solution_path, preserve_inconsistencies)
-    assign_track_ids(coords, graph, preserve_inconsistencies)
 
-    res_track_df, track_ims = mask_ims(coords, graph, seg_ims)
-    res_track_path = os.path.join(res_path, "res_track.txt")
-    res_track_df.to_csv(res_track_path, header=None, sep=" ", index=False)
+    if not preserve_inconsistencies:
+        assign_track_ids(coords, graph, preserve_inconsistencies)
+        res_track_df, track_ims = mask_ims(coords, graph, seg_ims)
+        res_track_path = os.path.join(res_path, "res_track.txt")
+        res_track_df.to_csv(res_track_path, header=None, sep=" ", index=False)
 
-    save_masks(track_ims, res_path)
+        save_masks(track_ims, res_path)
 
-    it_edges = get_inter_track_edges(res_track_df, coords)
-    it_edges_path = os.path.join(res_path, 'it_edges.csv')
-    it_edges.to_csv(it_edges_path, index=False)
+        it_edges = get_inter_track_edges(res_track_df, coords)
+        it_edges_path = os.path.join(res_path, 'it_edges.csv')
+        it_edges.to_csv(it_edges_path, index=False)
+    
+    # we just write the graph itself in full and don't recolour the vertices for now
+
+    g_path = os.path.join(res_path, 'full_sol.graphml')
+    to_delete_ids = [v.index for v in graph._g.vs if v['label'] in ['division', 'source', 'appearance', 'target']]
+    graph._g.delete_vertices(to_delete_ids)
+    delete_unused_attributes(graph._g, [
+        'coords',
+        'is_source',
+        'is_appearance',
+        'is_target',
+        'is_division',
+        'name',
+        'pixel_value',
+    ])
+    delete_unused_attributes(
+        graph._g,
+        [
+            'label'
+        ],
+        True
+    )
+    g_nx = graph._g.to_networkx()
+    nx.set_node_attributes(g_nx, coords.to_dict('index'))
+    nx.write_graphml_lxml(g_nx, g_path)
 
 @app.command()
 def convert_stardist(seg_path, data_dir, seq, solution_path):
@@ -288,10 +323,17 @@ if __name__ == "__main__":
     #     "/home/draga/PhD/code/experiments/ctc/Fluo-N2DL-HeLa/02_ST/output/28Feb23_0730.sol",
     # )
 
+    # convert_st(
+    #     "/home/draga/PhD/data/cell_tracking_challenge/Fluo-N2DL-HeLa/",
+    #     "01",
+    #     "/home/draga/PhD/code/experiments/ctc/Fluo-N2DL-HeLa/01_ST/output/07Feb23_0843.sol",
+    #     True
+    # )
+
     convert_st(
         "/home/draga/PhD/data/cell_tracking_challenge/Fluo-N2DL-HeLa/",
-        "01",
-        "/home/draga/PhD/code/experiments/ctc/Fluo-N2DL-HeLa/01_ST/output/07Feb23_0843.sol",
+        "02",
+        "/home/draga/PhD/code/experiments/ctc/Fluo-N2DL-HeLa/02_ST/output/28Feb23_0730.sol",
         True
     )
 

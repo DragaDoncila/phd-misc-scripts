@@ -3,7 +3,6 @@ import sys
 from ctc_timings import get_im_centers
 from functools import partial
 from string import whitespace
-import napari
 import numpy as np
 from flow_graph import FlowGraph
 import os
@@ -88,6 +87,7 @@ def get_gt_graph(coords, graph, gt_path):
 
 
 if __name__ == '__main__':
+    import napari
     # make FlowGraph from centers
     coords, min_t, max_t, corners = get_im_centers(GT_PATH)
     graph = FlowGraph(corners, coords, min_t=min_t, max_t=max_t)
