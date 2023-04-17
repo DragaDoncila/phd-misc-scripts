@@ -12,6 +12,7 @@ from scipy.spatial.distance import cdist
 from scipy.spatial import KDTree
 from tqdm import tqdm
 import pandas as pd
+import gurobipy as gp
 
 
 def euclidean_cost_func(source_node, dest_node):
@@ -37,6 +38,7 @@ def min_pairwise_distance_cost(child_distances):
         if distance_sum < min_dist:
             min_dist = distance_sum
     return min_dist
+
 
 def closest_neighbour_child_cost(parent_coords, child_coords):
     min_dist = math.inf
@@ -71,7 +73,6 @@ def dist_to_edge_cost_func(bounding_box_dimensions, node_coords):
 
 
 class FlowGraph:
-
     APPEARANCE_EDGE_REGEX = re.compile(r"e_a_[0-9]+\.[0-9]+")
     EXIT_EDGE_REGEX = re.compile(r"e_[0-9]+\.[0-9]+_t")
     DIVISION_EDGE_REGEX = re.compile(r"e_d_[0-9]+\.[0-9]+")
@@ -80,11 +81,11 @@ class FlowGraph:
     def __init__(
         self,
         im_dim: Tuple[int],
-        coords: 'pandas.DataFrame',
+        coords: "pandas.DataFrame",
         min_t=0,
         max_t=None,
         pixel_vals: List[int] = None,
-        migration_only: bool = False
+        migration_only: bool = False,
     ) -> None:
         """Generate a FlowGraph from the coordinates with given pixel values
 
@@ -111,30 +112,30 @@ class FlowGraph:
         migration_only: bool, optional
             Whether the model ignores divisions or not, by default False
         """
-        self.min_t = min_t or coords['t'].min()
-        self.max_t = max_t or coords['t'].max()
+        self.min_t = min_t or coords["t"].min()
+        self.max_t = max_t or coords["t"].max()
         self.t = self.max_t - self.min_t + 1
         self.im_dim = im_dim
         self.migration_only = migration_only
-        self.spatial_cols = ['y', 'x']
-        if 'z' in coords.columns:
-            self.spatial_cols.insert(0, 'z')
+        self.spatial_cols = ["y", "x"]
+        if "z" in coords.columns:
+            self.spatial_cols.insert(0, "z")
         self._g = self._init_nodes(coords, pixel_vals)
         self._kdt_dict = self._build_trees()
         self._init_edges()
 
-    
     def _build_trees(self):
-        """Build dictionary of t -> kd tree of all coordinates in frame t.
-        """
+        """Build dictionary of t -> kd tree of all coordinates in frame t."""
         kd_dict = {}
 
-        for t in tqdm(range(self.min_t, self.max_t + 1), total=self.t, desc='Building kD trees'):
+        for t in tqdm(
+            range(self.min_t, self.max_t + 1), total=self.t, desc="Building kD trees"
+        ):
             frame_vertices = self._g.vs(t=t)
             frame_indices = np.asarray([v.index for v in frame_vertices])
-            frame_coords = frame_vertices['coords']
+            frame_coords = frame_vertices["coords"]
             new_tree = KDTree(frame_coords)
-            kd_dict[t] = {'tree': new_tree, 'indices': frame_indices}
+            kd_dict[t] = {"tree": new_tree, "indices": frame_indices}
         return kd_dict
 
     def _init_nodes(self, coords, pixel_vals=None):
@@ -155,16 +156,16 @@ class FlowGraph:
 
         coords_numpy = coords[self.spatial_cols].to_numpy()
         false_arr = np.broadcast_to(False, n)
-        times = coords['t']
+        times = coords["t"]
         all_attrs_dict = {
-            'label': times.astype(str).str.cat(pixel_vals.astype(str), sep='_'),
-            'coords': coords_numpy,
-            'pixel_value': pixel_vals,
-            't': times.to_numpy(dtype=np.int32),
-            'is_source': false_arr,
-            'is_target': false_arr,
-            'is_appearance': false_arr,
-            'is_division': false_arr,
+            "label": times.astype(str).str.cat(pixel_vals.astype(str), sep="_"),
+            "coords": coords_numpy,
+            "pixel_value": pixel_vals,
+            "t": times.to_numpy(dtype=np.int32),
+            "is_source": false_arr,
+            "is_target": false_arr,
+            "is_appearance": false_arr,
+            "is_division": false_arr,
         }
         g = igraph.Graph(directed=True)
         g.add_vertices(n, all_attrs_dict)
@@ -268,7 +269,7 @@ class FlowGraph:
                 cost_target = 0
             else:
                 cost_app = cost_target = real_node_costs[i]
-            
+
             var_names_app.append(f"e_a_{v['t']}.{v['pixel_value']}")
             costs_app.append(cost_app)
             edges_app.append((self.appearance.index, v.index))
@@ -278,16 +279,12 @@ class FlowGraph:
             costs_target.append(cost_target)
             edges_target.append((v.index, self.target.index))
             labels_target.append(str(cost_target)[:4])
-        
-        app_attrs = {
-            'label': labels_app,
-            'var_name': var_names_app,
-            'cost': costs_app
-        }
+
+        app_attrs = {"label": labels_app, "var_name": var_names_app, "cost": costs_app}
         target_attrs = {
-            'label': labels_target,
-            'var_name': var_names_target,
-            'cost': costs_target
+            "label": labels_target,
+            "var_name": var_names_target,
+            "cost": costs_target,
         }
 
         self._g.add_edges(edges_app, attributes=app_attrs)
@@ -304,34 +301,46 @@ class FlowGraph:
         labels = []
 
         if not self.migration_only:
-            self._g.add_edge(self.source, self.division, cost=0, var_name="e_sd", label=0)
+            self._g.add_edge(
+                self.source, self.division, cost=0, var_name="e_sd", label=0
+            )
         edges_div = []
         all_costs_div = []
         var_names_div = []
         labels_div = []
 
         for source_t in tqdm(
-                range(self.min_t, self.max_t),
-                desc=f"Making migration & division edges",
-                total=self.t-1,
-            ):
+            range(self.min_t, self.max_t),
+            desc=f"Making migration & division edges",
+            total=self.t - 1,
+        ):
             dest_t = source_t + 1
             source_nodes = self._g.vs(t=source_t)
 
-            source_coords = np.asarray(source_nodes['coords'])
-            dest_tree = self._kdt_dict[dest_t]['tree']
+            source_coords = np.asarray(source_nodes["coords"])
+            dest_tree = self._kdt_dict[dest_t]["tree"]
             # TODO: parameterize the closest neighbours
-            dest_distances, dest_indices = dest_tree.query(source_coords, k=10 if dest_tree.n > 10 else dest_tree.n - 1)
+            dest_distances, dest_indices = dest_tree.query(
+                source_coords, k=10 if dest_tree.n > 10 else dest_tree.n - 1
+            )
 
             for i, src in enumerate(source_nodes):
-                dest_vertex_indices = self._kdt_dict[dest_t]['indices'][dest_indices[i]]
+                dest_vertex_indices = self._kdt_dict[dest_t]["indices"][dest_indices[i]]
                 dest_vertices = self._g.vs[list(dest_vertex_indices)]
                 # We're relying on these indices not changing partway through construction.
-                np.testing.assert_allclose(dest_tree.data[dest_indices[i]], [v['coords'] for v in dest_vertices])
-                
-                current_edges = [(src.index, dest_index) for dest_index in dest_vertex_indices]
+                np.testing.assert_allclose(
+                    dest_tree.data[dest_indices[i]],
+                    [v["coords"] for v in dest_vertices],
+                )
+
+                current_edges = [
+                    (src.index, dest_index) for dest_index in dest_vertex_indices
+                ]
                 current_costs = dest_distances[i]
-                current_var_names = [f"e_{src['t']}.{src['pixel_value']}_{dest['t']}.{dest['pixel_value']}" for dest in dest_vertices]
+                current_var_names = [
+                    f"e_{src['t']}.{src['pixel_value']}_{dest['t']}.{dest['pixel_value']}"
+                    for dest in dest_vertices
+                ]
                 current_labels = [str(cost)[:5] for cost in current_costs]
 
                 edges.extend(current_edges)
@@ -343,7 +352,9 @@ class FlowGraph:
                     continue
 
                 division_edge = (self.division.index, src.index)
-                cost_div = closest_neighbour_child_cost(src['coords'], dest_tree.data[dest_indices[i]])
+                cost_div = closest_neighbour_child_cost(
+                    src["coords"], dest_tree.data[dest_indices[i]]
+                )
                 var_name_div = f"e_d_{src['t']}.{src['pixel_value']}"
                 label_div = str(cost_div)[:5]
 
@@ -353,11 +364,11 @@ class FlowGraph:
                 labels_div.append(label_div)
 
         all_attrs = {
-            'var_name': var_names + var_names_div,
-            'cost': all_costs + all_costs_div,
-            'label': labels + labels_div
+            "var_name": var_names + var_names_div,
+            "cost": all_costs + all_costs_div,
+            "label": labels + labels_div,
         }
-        self._g.add_edges(edges+edges_div, attributes=all_attrs)
+        self._g.add_edges(edges + edges_div, attributes=all_attrs)
 
     def _is_virtual_node(self, v):
         return (
@@ -379,8 +390,8 @@ class FlowGraph:
         return var_sum
 
     def _get_objective_string(self):
-        var_names = self._g.es['var_name']
-        edge_costs = self._g.es['cost']
+        var_names = self._g.es["var_name"]
+        edge_costs = self._g.es["cost"]
         obj_str = "Minimize\n\t"
         for i in range(len(var_names)):
             var_cost_str = f"{edge_costs[i]} {var_names[i]} + "
@@ -398,26 +409,34 @@ class FlowGraph:
 
     def _get_flow_constraints(self):
         # out of source and into target
-        source_outgoing_names = self._get_incident_edges(self.source)[1]['var_name']
+        source_outgoing_names = self._get_incident_edges(self.source)[1]["var_name"]
         target_incoming_names = self._get_incident_edges(self.target)[0]["var_name"]
         source_outgoing_sum = self._get_var_sum_str(source_outgoing_names)
         target_incoming_sum = self._get_var_sum_str(target_incoming_names, neg="-")
-        network_capacity_str = f"\tflow_all: {source_outgoing_sum} + {target_incoming_sum} = 0\n"
+        network_capacity_str = (
+            f"\tflow_all: {source_outgoing_sum} + {target_incoming_sum} = 0\n"
+        )
 
         # division & appearance
         appearance_incoming, appearance_outgoing = self._get_incident_edges(
             self.appearance
         )
-        appearance_incoming_sum = self._get_var_sum_str(appearance_incoming['var_name'])
-        appearance_outgoing_sum = self._get_var_sum_str(appearance_outgoing['var_name'], neg="-")
+        appearance_incoming_sum = self._get_var_sum_str(appearance_incoming["var_name"])
+        appearance_outgoing_sum = self._get_var_sum_str(
+            appearance_outgoing["var_name"], neg="-"
+        )
         virtual_capacity_str = (
             f"\tflow_app: {appearance_incoming_sum} + {appearance_outgoing_sum} = 0\n"
         )
 
         if not self.migration_only:
-            division_incoming, division_outgoing = self._get_incident_edges(self.division)
-            division_incoming_sum = self._get_var_sum_str(division_incoming['var_name'])
-            division_outgoing_sum = self._get_var_sum_str(division_outgoing["var_name"], neg="-")
+            division_incoming, division_outgoing = self._get_incident_edges(
+                self.division
+            )
+            division_incoming_sum = self._get_var_sum_str(division_incoming["var_name"])
+            division_outgoing_sum = self._get_var_sum_str(
+                division_outgoing["var_name"], neg="-"
+            )
             virtual_capacity_str += (
                 f"\tflow_div: {division_incoming_sum} + {division_outgoing_sum} = 0\n"
             )
@@ -428,12 +447,14 @@ class FlowGraph:
             t_nodes = self._g.vs.select(t=t)
             for i, node in enumerate(t_nodes):
                 incoming_edges, outgoing_edges = self._get_incident_edges(node)
-                incoming_names = incoming_edges['var_name']
-                outgoing_names = outgoing_edges['var_name']
+                incoming_names = incoming_edges["var_name"]
+                outgoing_names = outgoing_edges["var_name"]
 
                 incoming_sum = self._get_var_sum_str(incoming_names)
                 outgoing_sum = self._get_var_sum_str(outgoing_names, neg="-")
-                inner_node_str += f"\tflow_{t}.{i}: {incoming_sum} + {outgoing_sum} = 0\n"
+                inner_node_str += (
+                    f"\tflow_{t}.{i}: {incoming_sum} + {outgoing_sum} = 0\n"
+                )
                 inner_node_str += f"\tforced_{t}.{i}: {incoming_sum} >= 1\n"
             inner_node_str += "\n"
         flow_const = f"\\Total network\n{network_capacity_str}\n\\Virtual nodes\n{virtual_capacity_str}\n\\Inner nodes\n{inner_node_str}"
@@ -501,12 +522,119 @@ class FlowGraph:
         with open(path, "w") as f:
             f.write(total_str)
 
+    def _to_gurobi_model(self):
+        edge_costs = list(self._g.es["cost"])
+        src_dest_info = gp.tuplelist([
+            (
+                e.index,
+                e["var_name"],
+                self._g.vs[e.source].index,
+                self._g.vs[e.source]["label"],
+                self._g.vs[e.target].index,
+                self._g.vs[e.target]["label"],
+            )
+            for e in self._g.es
+        ])
+        bounds = [math.inf if 'e_s' in e['var_name'] else 1 for e in self._g.es]
+        cost_dict = dict(zip(src_dest_info, edge_costs))
+        m = gp.Model("tracks")
+        flow = m.addVars(src_dest_info, obj=cost_dict, lb=0, ub=bounds, name="flow")
+
+        # flow out of source into target
+        src_edges = flow.select('*', '*', '*', 'source', '*', '*')
+        target_edges = flow.select('*', '*', '*', '*', '*', 'target')
+        m.addConstr(
+            sum(src_edges) == sum(target_edges)
+        )
+
+        # flow appearance & division
+        app_in = flow.select('*', '*', '*', '*', '*', 'appearance')
+        app_out = flow.select('*', '*', '*', 'appearance', '*', '*')
+        m.addConstr(
+            sum(app_in) == sum(app_out)
+        )
+        if not self.migration_only:
+            div_in = flow.select('*', '*', '*', '*', '*', 'division')
+            div_out = flow.select('*', '*', '*', 'division', '*', '*')
+            m.addConstr(
+                sum(div_in) == sum(div_out)
+            )
+
+        # flow inner nodes
+        for t in range(self.min_t, self.max_t + 1):
+            t_nodes = self._g.vs.select(t=t)
+            for i, node in enumerate(t_nodes):
+                node_id = node.index
+                node_out = flow.select('*', '*', node_id, '*', '*', '*')
+                node_in = flow.select('*', '*', '*', '*', node_id, '*')
+                m.addConstr(
+                    sum(node_in) == sum(node_out), f'migration_{i}'
+                )
+                m.addConstr(sum(node_in) >= 1, f'forced_{i}')
+
+                if not self.migration_only:
+                    div_edge = flow.select('*', '*', '*', 'division', node_id, '*')
+                    m.addConstr(sum(node_in) - sum(div_edge) >= sum(div_edge), f'div_{i}')
+
+        return m, flow
+
+    def save_flow_info(self, coords):
+        coords['in-app'] = 0
+        coords['in-div'] = 0
+        coords['in-mig'] = 0
+        coords['out-mig'] = 0
+        coords['out-target'] = 0        
+
+        sol_edges = self._g.es.select(flow_gt=0)
+        for e in sol_edges:
+            flow = e['flow']
+            src_id = e.source
+            src = self._g.vs[src_id]
+            dest_id = e.target
+            dest = self._g.vs[dest_id]
+
+            # migration edge
+            if not self._is_virtual_node(src) and not self._is_virtual_node(dest):
+                coords.loc[[dest_id], ['in-mig']] += flow
+                coords.loc[[src_id], ['out-mig']] += flow
+            elif src['is_division']:
+                coords.loc[[dest_id], ['in-div']] += flow
+            elif src['is_appearance']:
+                coords.loc[[dest_id], ['in-app']] += flow
+            elif dest['is_target']:
+                coords.loc[[src_id], ['out-target']] += flow
+
+
+    def introduce_vertex(self, new_vid, t, coords, new_label):
+        v = self._g.add_vertex(
+                    label=f'{t}_{new_label}',
+                    coords=np.asarray(coords),
+                    pixel_value=new_label,
+                    t=t,
+                    is_source=False,
+                    is_target=False,
+                    is_appearance=False,
+                    is_division=False,
+                )
+        assert v.index == new_vid, f"New index was supposed to be {new_vid} but is {v.index}."
+
+    def add_edge(self, u, v, is_fixed=False):
+        u_node = self._g.vs[u]
+        v_node = self._g.vs[v]
+        if is_fixed:
+            cost = 0
+        else:
+            cost = euclidean_cost_func(u_node, v_node)
+        var_name = f"e_{u_node['t']}.{u_node['pixel_value']}_{v_node['t']}.{v_node['pixel_value']}"
+        label = str(cost)[:5]
+        self._g.add_edge(u_node, v_node, cost=cost, var_name=var_name, label=label)
 
 if __name__ == "__main__":
     import pandas as pd
+
     # coords = [(0, 50.0, 50.0), (0, 40, 50), (0, 30, 57), (1, 50, 52), (1, 38, 51), (1, 29, 60)]
     # pixel_vals = [1, 2, 3, 1, 2, 3]
-    model_pth = '/home/draga/PhD/code/experiments/preconfig/models/misc'
+    model_pth = "/home/draga/PhD/code/experiments/preconfig/models/misc"
     coords = [
         (0, 50.0, 50.0),
         (0, 40, 50),
@@ -518,10 +646,17 @@ if __name__ == "__main__":
         (2, 37, 53),
         (2, 28, 64),
     ]
-    coords = pd.DataFrame(coords, columns=['t', 'y', 'x'])
+    coords = pd.DataFrame(coords, columns=["t", "y", "x"])
 
     pixel_vals = [1, 2, 3, 1, 2, 3, 1, 2, 3]
-    graph = FlowGraph([(0, 0), (100, 100)], coords, min_t=0, max_t=2, pixel_vals=pixel_vals, migration_only=True)
-    igraph.plot(graph._g, layout=graph._g.layout('rt'))
-    graph._to_lp(os.path.join(model_pth, 'labelled_constraints.lp'))
+    graph = FlowGraph(
+        [(0, 0), (100, 100)],
+        coords,
+        min_t=0,
+        max_t=2,
+        pixel_vals=pixel_vals,
+        migration_only=True,
+    )
+    igraph.plot(graph._g, layout=graph._g.layout("rt"))
+    graph._to_lp(os.path.join(model_pth, "labelled_constraints.lp"))
     # print(cdist(coords[0:3], coords[3:6]))
