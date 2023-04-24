@@ -120,23 +120,37 @@ class FlowGraph:
         self.spatial_cols = ["y", "x"]
         if "z" in coords.columns:
             self.spatial_cols.insert(0, "z")
+        if pixel_vals is None and "label" in coords.columns:
+            pixel_vals = coords["label"].tolist()
         self._g = self._init_nodes(coords, pixel_vals)
         self._kdt_dict = self._build_trees()
         self._init_edges()
 
     def _build_trees(self):
-        """Build dictionary of t -> kd tree of all coordinates in frame t."""
+        """Build dictionary of t -> kd tree for all vertices in all frames."""
         kd_dict = {}
 
         for t in tqdm(
             range(self.min_t, self.max_t + 1), total=self.t, desc="Building kD trees"
         ):
-            frame_vertices = self._g.vs(t=t)
-            frame_indices = np.asarray([v.index for v in frame_vertices])
-            frame_coords = frame_vertices["coords"]
-            new_tree = KDTree(frame_coords)
-            kd_dict[t] = {"tree": new_tree, "indices": frame_indices}
+            tree, indices = self._build_tree_at_t(t)
+            kd_dict[t] = {"tree": tree, "indices": indices}
         return kd_dict
+
+    def _build_tree_at_t(self, t):
+        """Get tree and vertex indices for a given t.
+
+        Args:
+            t (int): frame to build tree for 
+
+        Returns:
+            Tuple(kdtree, np.ndarray): tree and vertex indices for tree coordinates
+        """
+        frame_vertices = self._g.vs(t=t)
+        frame_indices = np.asarray([v.index for v in frame_vertices])
+        frame_coords = frame_vertices["coords"]
+        new_tree = KDTree(frame_coords)
+        return new_tree, frame_indices
 
     def _init_nodes(self, coords, pixel_vals=None):
         """Create igraph from coords and pixel_vals with len(coords) vertices.
@@ -174,7 +188,7 @@ class FlowGraph:
             name="source",
             label="source",
             coords=np.asarray((0, 0)),
-            pixel_value=None,
+            pixel_value=0,
             t=-1,
             is_source=True,
             is_target=False,
@@ -186,7 +200,7 @@ class FlowGraph:
             name="appearance",
             label="appearance",
             coords=np.asarray((0, 0)),
-            pixel_value=None,
+            pixel_value=0,
             t=-1,
             is_source=False,
             is_target=False,
@@ -198,7 +212,7 @@ class FlowGraph:
             name="target",
             label="target",
             coords=np.asarray((0, 0)),
-            pixel_value=None,
+            pixel_value=0,
             t=self.max_t + 1,  # max frame index is max_t
             is_source=False,
             is_target=True,
@@ -212,7 +226,7 @@ class FlowGraph:
                 label="division",
                 # TODO: will break for 4d maybe
                 coords=np.asarray((0, 0)),
-                pixel_value=None,
+                pixel_value=0,
                 t=-1,
                 is_source=False,
                 is_target=False,
@@ -304,10 +318,6 @@ class FlowGraph:
             self._g.add_edge(
                 self.source, self.division, cost=0, var_name="e_sd", label=0
             )
-        edges_div = []
-        all_costs_div = []
-        var_names_div = []
-        labels_div = []
 
         for source_t in tqdm(
             range(self.min_t, self.max_t),
@@ -315,60 +325,19 @@ class FlowGraph:
             total=self.t - 1,
         ):
             dest_t = source_t + 1
-            source_nodes = self._g.vs(t=source_t)
-
-            source_coords = np.asarray(source_nodes["coords"])
-            dest_tree = self._kdt_dict[dest_t]["tree"]
-            # TODO: parameterize the closest neighbours
-            dest_distances, dest_indices = dest_tree.query(
-                source_coords, k=10 if dest_tree.n > 10 else dest_tree.n - 1
-            )
-
-            for i, src in enumerate(source_nodes):
-                dest_vertex_indices = self._kdt_dict[dest_t]["indices"][dest_indices[i]]
-                dest_vertices = self._g.vs[list(dest_vertex_indices)]
-                # We're relying on these indices not changing partway through construction.
-                np.testing.assert_allclose(
-                    dest_tree.data[dest_indices[i]],
-                    [v["coords"] for v in dest_vertices],
-                )
-
-                current_edges = [
-                    (src.index, dest_index) for dest_index in dest_vertex_indices
-                ]
-                current_costs = dest_distances[i]
-                current_var_names = [
-                    f"e_{src['t']}.{src['pixel_value']}_{dest['t']}.{dest['pixel_value']}"
-                    for dest in dest_vertices
-                ]
-                current_labels = [str(cost)[:5] for cost in current_costs]
-
-                edges.extend(current_edges)
-                var_names.extend(current_var_names)
-                labels.extend(current_labels)
-                all_costs.extend(current_costs)
-
-                if self.migration_only:
-                    continue
-
-                division_edge = (self.division.index, src.index)
-                cost_div = closest_neighbour_child_cost(
-                    src["coords"], dest_tree.data[dest_indices[i]]
-                )
-                var_name_div = f"e_d_{src['t']}.{src['pixel_value']}"
-                label_div = str(cost_div)[:5]
-
-                edges_div.append(division_edge)
-                all_costs_div.append(cost_div)
-                var_names_div.append(var_name_div)
-                labels_div.append(label_div)
+            new_mig_edges, new_div_edges = self._get_frame_edges(source_t, dest_t)
+            for edge_dict in [new_mig_edges, new_div_edges]:
+                edges.extend(edge_dict['edges'])
+                var_names.extend(edge_dict['var_names'])
+                all_costs.extend(edge_dict['costs'])
+                labels.extend(edge_dict['labels'])
 
         all_attrs = {
-            "var_name": var_names + var_names_div,
-            "cost": all_costs + all_costs_div,
-            "label": labels + labels_div,
+            "var_name": var_names,
+            "cost": all_costs,
+            "label": labels,
         }
-        self._g.add_edges(edges + edges_div, attributes=all_attrs)
+        self._g.add_edges(edges, attributes=all_attrs)
 
     def _is_virtual_node(self, v):
         return (
@@ -605,7 +574,7 @@ class FlowGraph:
                 coords.loc[[src_id], ['out-target']] += flow
 
 
-    def introduce_vertex(self, new_vid, t, coords, new_label):
+    def introduce_vertex(self, new_vid, t, coords, new_label, add_hyperedges=False):
         v = self._g.add_vertex(
                     label=f'{t}_{new_label}',
                     coords=np.asarray(coords),
@@ -617,6 +586,113 @@ class FlowGraph:
                     is_division=False,
                 )
         assert v.index == new_vid, f"New index was supposed to be {new_vid} but is {v.index}."
+        if add_hyperedges:
+            # add appearance to v
+            # add v to target
+            pass
+
+    def introduce_vertices(self, oracle):
+        """Introduce vertices from oracle into graph.
+
+        This includes rebuilding the kdtrees for affected frames and
+        recomputing edges between frames (t-1)->(t) and
+        (t) -> (t+1) for each affected t.
+
+        Args:
+            oracle Dict[int, tuple]: dictionary of info about new vertices
+        """
+        affected_ts = set()
+        for new_vid, v_info in oracle.items():
+            t, coords, new_label = v_info
+            self.introduce_vertex(new_vid, t, coords, new_label, add_hyperedges=True)
+            affected_ts.add(t)
+        affected_ts = list(sorted(affected_ts))
+        for t in affected_ts:
+            tree, indices = self._build_tree_at_t(t)
+            self._kdt_dict[t] = {
+                "tree": tree, 
+                "indices": indices
+            }
+        for i, t in enumerate(affected_ts):
+            if not i:
+                pairs = [(t-1, t), (t, t+1)]
+            elif t - affected_ts[i-1] > 1:
+                pairs = [(t-1, t), (t, t+1)]
+            else:
+                pairs = [(t, t+1)]
+            for pair in pairs:
+                self._rebuild_frame_edges(pair[0], pair[1])
+
+    def _get_frame_edges(self, source_t, dest_t):
+        source_nodes = self._g.vs(t=source_t)
+        source_coords = np.asarray(source_nodes["coords"])
+
+        dest_tree = self._kdt_dict[dest_t]["tree"]
+        # TODO: parameterize the closest neighbours
+        dest_distances, dest_indices = dest_tree.query(
+            source_coords, k=10 if dest_tree.n > 10 else dest_tree.n - 1
+        )
+
+        frame_edges = []
+        frame_var_names = []
+        frame_labels = []
+        frame_costs = []
+
+        frame_div_edges = []
+        frame_div_var_names = []
+        frame_div_costs = []
+        frame_div_labels = []
+        for i, src in enumerate(source_nodes):
+            dest_vertex_indices = self._kdt_dict[dest_t]["indices"][dest_indices[i]]
+            dest_vertices = self._g.vs[list(dest_vertex_indices)]
+            # We're relying on these indices not changing partway through construction.
+            np.testing.assert_allclose(
+                dest_tree.data[dest_indices[i]],
+                [v["coords"] for v in dest_vertices],
+            )
+
+            current_edges = [
+                (src.index, dest_index) for dest_index in dest_vertex_indices
+            ]
+            current_costs = dest_distances[i]
+            current_var_names = [
+                f"e_{src['t']}.{src['pixel_value']}_{dest['t']}.{dest['pixel_value']}"
+                for dest in dest_vertices
+            ]
+            current_labels = [str(cost)[:5] for cost in current_costs]
+
+            frame_edges.extend(current_edges)
+            frame_var_names.extend(current_var_names)
+            frame_labels.extend(current_labels)
+            frame_costs.extend(current_costs)
+
+            if self.migration_only:
+                continue
+
+            division_edge = (self.division.index, src.index)
+            cost_div = closest_neighbour_child_cost(
+                src["coords"], dest_tree.data[dest_indices[i]]
+            )
+            var_name_div = f"e_d_{src['t']}.{src['pixel_value']}"
+            label_div = str(cost_div)[:5]
+
+            frame_div_edges.append(division_edge)
+            frame_div_costs.append(cost_div)
+            frame_div_var_names.append(var_name_div)
+            frame_div_labels.append(label_div)
+        mig_edges = {
+            'edges': frame_edges,
+            'var_names': frame_var_names,
+            'costs': frame_costs,
+            'labels': frame_labels
+        }
+        div_edges = {
+            'edges': frame_div_edges,
+            'var_names': frame_div_var_names,
+            'costs': frame_div_costs,
+            'labels': frame_div_labels            
+        }
+        return mig_edges, div_edges
 
     def add_edge(self, u, v, is_fixed=False):
         u_node = self._g.vs[u]
