@@ -5,6 +5,7 @@ import re
 from typing import Callable, List, Optional, Tuple, Union
 
 import numpy as np
+import networkx as nx
 import igraph
 from itertools import combinations, product
 
@@ -13,6 +14,7 @@ from scipy.spatial import KDTree
 from tqdm import tqdm
 import pandas as pd
 import gurobipy as gp
+import time
 
 
 def euclidean_cost_func(source_node, dest_node):
@@ -252,7 +254,6 @@ class FlowGraph:
         """
         self._g.add_edge(self.source, self.appearance, cost=0, var_name="e_sa", label=0)
 
-        print("Computing appearance/exit costs")
         real_nodes = self._g.vs(lambda v: not self._is_virtual_node(v))
         real_node_coords = np.asarray([v["coords"] for v in real_nodes])
         cost_func = partial(dist_to_edge_cost_func, self.im_dim)
@@ -555,7 +556,7 @@ class FlowGraph:
         coords['out-target'] = 0        
 
         sol_edges = self._g.es.select(flow_gt=0)
-        for e in sol_edges:
+        for e in tqdm(sol_edges, desc='Summing flow'):
             flow = e['flow']
             src_id = e.source
             src = self._g.vs[src_id]
@@ -575,9 +576,10 @@ class FlowGraph:
 
 
     def introduce_vertex(self, new_vid, t, coords, new_label, add_hyperedges=False):
+        node_coords = np.asarray(coords)
         v = self._g.add_vertex(
                     label=f'{t}_{new_label}',
-                    coords=np.asarray(coords),
+                    coords=node_coords,
                     pixel_value=new_label,
                     t=t,
                     is_source=False,
@@ -587,9 +589,15 @@ class FlowGraph:
                 )
         assert v.index == new_vid, f"New index was supposed to be {new_vid} but is {v.index}."
         if add_hyperedges:
+            app = target = dist_to_edge_cost_func(self.im_dim, node_coords)
+            if t == self.min_t:
+                app = 0
+            elif t == self.max_t:
+                target = 0
             # add appearance to v
+            self._g.add_edge(self.appearance, v, var_name=f"e_a_{v['t']}.{v['pixel_value']}", cost=app, label=str(app)[:5])
             # add v to target
-            pass
+            self._g.add_edge(v, self.target, var_name=f"e_{v['t']}.{v['pixel_value']}_t", cost=target, label=str(target)[:5])
 
     def introduce_vertices(self, oracle):
         """Introduce vertices from oracle into graph.
@@ -613,6 +621,7 @@ class FlowGraph:
                 "tree": tree, 
                 "indices": indices
             }
+        all_pairs = []
         for i, t in enumerate(affected_ts):
             if not i:
                 pairs = [(t-1, t), (t, t+1)]
@@ -621,18 +630,55 @@ class FlowGraph:
             else:
                 pairs = [(t, t+1)]
             for pair in pairs:
-                self._rebuild_frame_edges(pair[0], pair[1])
+                t1 = pair[0]
+                t2 = pair[1]
+                if t1 < 0:
+                    continue
+                if t2 > self.max_t:
+                    continue
+                all_pairs.append(pair)
+
+        start_time = time.time()
+        for pair in all_pairs:
+            # delete current migration & division edges
+            self._clear_frame(pair[0], pair[1])
+        for pair in tqdm(all_pairs, desc='Rebuilding frames'):
+            # recompute
+            self._rebuild_frame_edges(pair[0], pair[1])
+        duration = time.time() - start_time
+        return duration, len(all_pairs)
+    
+    def _clear_frame(self, source_t, dest_t):
+        # delete all migration and division edges
+        frame_mig_edges = self._g.es.select(lambda e: self._g.vs[e.source]['t'] == source_t and self._g.vs[e.target]['t'] == dest_t)
+        self._g.delete_edges(frame_mig_edges)
+        frame_div_edges = self._g.es.select(lambda e: self._g.vs[e.source]['is_division'] and self._g.vs[e.target]['t'] == source_t)
+        self._g.delete_edges(frame_div_edges)
+
+    def _rebuild_frame_edges(self, source_t, dest_t):
+        # get edges for this frame
+        mig_edges, div_edges = self._get_frame_edges(source_t, dest_t)
+        all_attrs = {
+            "var_name": mig_edges['var_names'] + div_edges['var_names'],
+            "cost": mig_edges['costs'] + div_edges['costs'],
+            "label": mig_edges['labels'] + div_edges['labels'],
+        }
+        self._g.add_edges(mig_edges['edges'] + div_edges['edges'], attributes=all_attrs)
 
     def _get_frame_edges(self, source_t, dest_t):
         source_nodes = self._g.vs(t=source_t)
         source_coords = np.asarray(source_nodes["coords"])
-
+        if len(source_coords) == 0:
+            raise ValueError(f"No coords found for frame {source_t}.")
         dest_tree = self._kdt_dict[dest_t]["tree"]
+        if dest_tree.n == 0:
+            raise ValueError(f"kD-tree for frame {dest_t} contains no coordinates.")
         # TODO: parameterize the closest neighbours
+        k = 10 if dest_tree.n > 10 else dest_tree.n
         dest_distances, dest_indices = dest_tree.query(
-            source_coords, k=10 if dest_tree.n > 10 else dest_tree.n - 1
-        )
-
+            source_coords, 
+            k=k if k > 1 else [k]
+        )            
         frame_edges = []
         frame_var_names = []
         frame_labels = []
@@ -704,6 +750,53 @@ class FlowGraph:
         var_name = f"e_{u_node['t']}.{u_node['pixel_value']}_{v_node['t']}.{v_node['pixel_value']}"
         label = str(cost)[:5]
         self._g.add_edge(u_node, v_node, cost=cost, var_name=var_name, label=label)
+
+    def store_solution(self, opt_model):
+        start = time.time()
+        sol_vars = opt_model.getVars()
+        v_info = [v.VarName.lstrip('flow[').rstrip(']').split(',') + [v.X] for v in sol_vars]
+        v_dict = {int(eid): {
+            'var_name': var_name,
+            'src_id': int(src_id),
+            'target_id': int(target_id),
+            'flow': float(flow)
+        } for eid, var_name, src_id, src_label, target_id, target_label, flow in v_info if float(flow) > 0}
+
+        # store the correct flow on each graph edge
+        self._g.es['flow'] = 0
+        self._g.es.select(list(v_dict.keys()))['flow'] = [v_dict[eid]['flow'] for eid in v_dict.keys()]
+        duration = time.time() - start
+        return duration
+
+    def convert_sol_igraph_to_nx(self):
+        for v in self._g.vs:
+            v['y'] = v['coords'][0]
+            v['x'] = v['coords'][1]
+            for attr_name in self._g.vertex_attributes():
+                if isinstance(v[attr_name], np.bool_):
+                    v[attr_name] = int(v[attr_name])
+                elif v[attr_name] is None:
+                    v[attr_name] = 0
+        for e in self._g.es:
+            for attr_name in self._g.edge_attributes():
+                if e[attr_name] is None:
+                    e[attr_name] = 0
+        del(self._g.vs['coords'])
+        del(self._g.vs['name'])
+        del(self._g.vs['label'])
+
+        del(self._g.es['label'])
+        nx_g = self._g.to_networkx(create_using=nx.DiGraph)
+        return nx_g
+    
+    def get_coords_df(self):
+        coords = self._g.get_vertex_dataframe()
+        split_cols = tuple(zip(*list(coords['coords'].values)))
+        for i, col in enumerate(self.spatial_cols):
+            coords[col] = split_cols[i]
+        coords.drop(columns=['label', 'name', 'coords'], inplace=True)
+        coords.rename({'pixel_value': 'label'}, axis=1, inplace=True)
+        return coords
 
 if __name__ == "__main__":
     import pandas as pd

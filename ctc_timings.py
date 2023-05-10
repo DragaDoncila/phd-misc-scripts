@@ -21,23 +21,22 @@ SEQS = ['02_ST', '02_GT']
 MIGRATION_ONLY = False
 
 def extract_im_centers(im_arr):
-    centers = get_centers(im_arr)
+    centers, labels = get_centers(im_arr)
     center_coords = np.asarray(get_point_coords(centers))
     coords_df = pd.DataFrame(center_coords, columns=['t', 'y', 'x'])
     coords_df['t'] = coords_df['t'].astype(int)
-    labels = []
-    for coord in center_coords:
-        labels.append(im_arr[tuple(coord.astype(int))])
     coords_df['label'] = labels
     min_t = 0
     max_t = im_arr.shape[0]-1
-    corners = [(0, 0), im_arr.shape[1:]]
+    corners = [tuple([0 for _ in range(len(im_arr.shape[1:]))]), im_arr.shape[1:]]
     return coords_df, min_t, max_t, corners
 
-def get_im_centers(im_pth):
+def get_im_centers(im_pth, return_ims=False):
     im_arr = load_tiff_frames(im_pth)
     coords_df, min_t, max_t, corners = extract_im_centers(im_arr)
-    return coords_df, min_t, max_t, corners
+    if not return_ims:
+        return coords_df, min_t, max_t, corners
+    return im_arr, coords_df, min_t, max_t, corners
 
 def get_graph(coords, min_t, max_t, corners):
     start = time.time()

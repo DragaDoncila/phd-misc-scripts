@@ -13,13 +13,28 @@ description? Right now they would just show up as FP edges I guess. Is that ok?
 {   'AOGM': 603.5,
     'DET': 0.9957170968862137,
     'TRA': 0.9939183537734423,
-    'fn_edges': 73,
-    'fn_nodes': 37,
-    'fp_edges': 73,
+    'fn_edges': 73, # 89
+    'fn_nodes': 37, 
+    'fp_edges': 73, # 85
     'fp_nodes': 0,
     'ns_nodes': 0,
-    'ws_edges': 51}
+    'ws_edges': 51} # 74
 ```
+
+
+
+```python
+{   'AOGM': 375.5,
+    'DET': 0.9976849172357912,
+    'TRA': 0.9962159765400623,
+    'fn_edges': 49,
+    'fn_nodes': 20,
+    'fp_edges': 54,
+    'fp_nodes': 0,
+    'ns_nodes': 0,
+    'ws_edges': 48}
+```
+
 
 No oracle, super rough making it match CTC
 
@@ -70,7 +85,20 @@ Oracle with introduced vertices & fixed edges and resolved, cost=0:
 [?] Did we introduce any merge vertices? Nope, 8 left.
 
 
-Oracle with introduced vertices only (no edge fixing), resolved, cost=0
+Oracle with introduced vertices only (no edge fixing), resolved
 
+```python
+{   'AOGM': 375.5,
+    'DET': 0.9976849172357912,
+    'TRA': 0.9962159765400623,
+    'fn_edges': 49,
+    'fn_nodes': 20,
+    'fp_edges': 54,
+    'fp_nodes': 0,
+    'ns_nodes': 0,
+    'ws_edges': 48}
+```
 
-
+[!] We introduced 8 new merge vertices here
+    - three of them have unmatched vertices if we were to do another pass
+[!] Literally every edge error has increased

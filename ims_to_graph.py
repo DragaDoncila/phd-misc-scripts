@@ -41,11 +41,16 @@ def load_h5(im_pth=H5_PTH, group='volume', key='data'):
         dataset = np.squeeze(f[group][key][...])
     return dataset    
 
-def get_real_center(prop):
-    if prop.solidity > 0.85:
-        return prop.centroid
+# def get_real_center(prop, im_arr):
+#     # check that there's a label in the center, and that it's solid
+#     value_at_center = im_arr[tuple(np.asarray(prop.centroid, dtype=int))]
+#     if value_at_center != 0:
+#         return prop.centroid
     
-    # shape is too convex to use centroid, get center from pixelgraph
+#     # shape is too convex to use centroid, get center from pixelgraph
+#     return get_medoid(prop)
+
+def get_medoid(prop):
     region = prop.image
     g, nodes = pixel_graph(region, connectivity=2)
     medoid_offset, _ = central_pixel(
@@ -54,17 +59,27 @@ def get_real_center(prop):
     medoid_offset = np.asarray(medoid_offset)
     top_left = np.asarray(prop.bbox[:region.ndim])
     medoid = tuple(top_left + medoid_offset)
-    return medoid
+    return medoid    
 
 def get_centers(segmentation):
     n_frames = segmentation.shape[0]
     centers_of_mass = []
+    all_labels = []
     for i in range(n_frames):
         current_frame = segmentation[i]
         props = regionprops(current_frame)
-        current_centers = [get_real_center(prop) for prop in props]
-        centers_of_mass.append(current_centers)
-    return centers_of_mass
+        current_centers = [prop.centroid for prop in props]
+        frame_labels = current_frame[tuple(np.asarray(current_centers, dtype=int).T)]
+        label_center_mapping = dict(zip(frame_labels, current_centers))
+        # we haven't found centers for these labels, we need to medoid them
+        unfound_labels = set(np.unique(current_frame)) - set(label_center_mapping.keys()) - set([0])
+        for prop in props:
+            if prop.label in unfound_labels:
+                label_center_mapping[prop.label] = get_medoid(prop)
+        labels, centers = zip(*label_center_mapping.items())
+        centers_of_mass.append(centers)
+        all_labels.extend(labels)
+    return centers_of_mass, all_labels
 
 def get_point_coords(centers_of_mass):
     points_list = []
@@ -72,17 +87,6 @@ def get_point_coords(centers_of_mass):
         points = [(i, *center) for center in frame_centers]
         points_list.extend(points)
     return points_list
-
-def get_pixel_value_at_centers(seg, seg_centers):
-    pixel_vals = []
-    for t in range(seg.shape[0]):
-        frame_centers = seg_centers[t]
-        frame = seg[t]
-        int_centers = list(map(lambda tpl: tuple(int(el) for el in tpl), frame_centers))
-        int_coords = list(map(list, zip(*int_centers)))
-        frame_vals = list(frame[tuple(int_coords)])
-        pixel_vals.extend(frame_vals)
-    return pixel_vals
 
 if __name__ == "__main__":
     # raw_im = load_tiff_frames(im_dir='/home/draga/PhD/data/Fluo-N2DL-HeLa/01/')
