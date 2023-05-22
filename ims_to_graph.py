@@ -2,7 +2,7 @@ import glob
 import numpy as np
 from tifffile import TiffFile
 import napari
-import h5py
+# import h5py
 from scipy.ndimage import center_of_mass, label
 from skimage.measure import regionprops
 from skimage.graph import pixel_graph, central_pixel
@@ -16,7 +16,10 @@ H5_PTH = '/home/draga/PhD/data/mitocheck_2d+t/mitocheck_94570_2D+t_01-53.h5'
 
 def peek(im_file):
     with TiffFile(im_file) as im:
-        im_shape = im.pages[0].shape
+        if len(im.pages) == 1:
+            im_shape = im.pages[0].shape
+        else:
+            im_shape = (len(im.pages), ) + im.pages[0].shape
         im_dtype = im.pages[0].dtype
     return im_shape, im_dtype
 
@@ -27,7 +30,8 @@ def load_tiff_frames(im_dir=IMS_DIR):
     im_array = np.zeros((n_frames, *frame_shape), dtype=im_dtype)
     for i, tiff_pth in enumerate(all_tiffs):
         with TiffFile(tiff_pth) as im:
-            im_array[i] = im.pages[0].asarray()
+            for page in im.pages:
+                im_array[i] = page.asarray()
     return im_array
 
 def load_tiff(im_pth):
@@ -68,17 +72,18 @@ def get_centers(segmentation):
     for i in range(n_frames):
         current_frame = segmentation[i]
         props = regionprops(current_frame)
-        current_centers = [prop.centroid for prop in props]
-        frame_labels = current_frame[tuple(np.asarray(current_centers, dtype=int).T)]
-        label_center_mapping = dict(zip(frame_labels, current_centers))
-        # we haven't found centers for these labels, we need to medoid them
-        unfound_labels = set(np.unique(current_frame)) - set(label_center_mapping.keys()) - set([0])
-        for prop in props:
-            if prop.label in unfound_labels:
-                label_center_mapping[prop.label] = get_medoid(prop)
-        labels, centers = zip(*label_center_mapping.items())
-        centers_of_mass.append(centers)
-        all_labels.extend(labels)
+        if props:
+            current_centers = [prop.centroid for prop in props]
+            frame_labels = current_frame[tuple(np.asarray(current_centers, dtype=int).T)]
+            label_center_mapping = dict(zip(frame_labels, current_centers))
+            # we haven't found centers for these labels, we need to medoid them
+            unfound_labels = set(np.unique(current_frame)) - set(label_center_mapping.keys()) - set([0])
+            for prop in props:
+                if prop.label in unfound_labels:
+                    label_center_mapping[prop.label] = get_medoid(prop)
+            labels, centers = zip(*label_center_mapping.items())
+            centers_of_mass.append(centers)
+            all_labels.extend(labels)
     return centers_of_mass, all_labels
 
 def get_point_coords(centers_of_mass):

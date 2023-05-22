@@ -216,11 +216,17 @@ def get_oracle(merge_node_ids, sol_graph, coords, gt_coords, sol_ims, gt_ims):
         v_info = None
     return oracle
 
-def store_flow(nx_sol, ig_sol):
+def store_flow(nx_sol, ig_sol, hyper_mapping=None):
     ig_sol._g.es.set_attribute_values('flow', 0)
     flow_es = nx.get_edge_attributes(nx_sol, 'flow')
     for e_id, flow in flow_es.items():
         src, target = e_id
+        if hyper_mapping is not None and src in hyper_mapping:
+            hyper_v = hyper_mapping[src]
+            src = ig_sol.getattr(hyper_v).index
+        if hyper_mapping is not None and target in hyper_mapping:
+            hyper_v = hyper_mapping[target]
+            target = ig_sol.getattr(hyper_v).index
         ig_sol._g.es[ig_sol._g.get_eid(src, target)]['flow'] = flow
         
 def load_sol_data(sol_pth, seg_pth):
@@ -234,6 +240,30 @@ def load_sol_data(sol_pth, seg_pth):
     max_t = sol_ims.shape[0] - 1
     sol_g = FlowGraph(im_dim, oracle_node_df, min_t, max_t)
     store_flow(sol, sol_g)
+    return sol_g, sol_ims, oracle_node_df
+
+def load_final_sol_data(sol_pth, seg_pth):
+    sol = nx.read_graphml(sol_pth, node_type=int)
+    sol_ims = load_tiff_frames(seg_pth)
+    im_dim =  [(0, 0), sol_ims.shape[1:]]
+    min_t = 0
+    max_t = sol_ims.shape[0] - 1
+    oracle_node_df = pd.DataFrame.from_dict(sol.nodes, orient='index')
+    oracle_node_df.rename(columns={'pixel_value':'label'}, inplace=True)
+    hyper_indices = list(oracle_node_df[(oracle_node_df['t'] < 0) | (oracle_node_df['t'] > max_t)].index)
+    hyper_mappping = {}
+    for idx in hyper_indices:
+        if oracle_node_df.loc[idx, 'is_appearance']:
+            hyper_mappping[idx] = 'appearance'
+        elif oracle_node_df.loc[idx, 'is_division']:
+            hyper_mappping[idx] = 'division'
+        elif oracle_node_df.loc[idx, 'is_target']:
+            hyper_mappping[idx] = 'target'
+        elif oracle_node_df.loc[idx, 'is_source']:
+            hyper_mappping[idx] = 'source'
+    oracle_node_df = oracle_node_df.drop(index=hyper_indices)
+    sol_g = FlowGraph(im_dim, oracle_node_df, min_t, max_t)
+    store_flow(sol, sol_g, hyper_mappping)
     return sol_g, sol_ims, oracle_node_df
 
 def get_merges(sol_g):
@@ -257,6 +287,31 @@ def mask_new_vertices(introduce_info, sol_ims, gt_ims):
         int_coords = tuple(int(coord) for coord in coords)
         mask = gt_frame == gt_frame[int_coords]
         sol_ims[intro_t][mask] = new_label
+
+def terminate_vertices(vertices, sol_g):
+    get_distance = lambda x, y: abs(np.linalg.norm(np.asarray(x['coords'])) - np.linalg.norm(np.asarray(y['coords'])))
+    actually_changed = []
+    for vertex in vertices:
+        neighbours = sol_g._g.neighbors(vertex, 'in')
+        real_neighbours = []
+        for n in neighbours:
+            nv = sol_g._g.vs[n]
+            if not (nv['is_appearance'] or nv['is_division']):
+                if sol_g._g.es[sol_g._g.get_eid(n, vertex)]['flow'] > 0 and\
+                    sol_g._g.es[sol_g._g.get_eid(n, sol_g.target)]['cost'] != 0:
+                    # in case we've already divested this parent
+                    real_neighbours.append(nv)
+        # if this merge vertex has already been resolved, we don't mess with anything
+        if len(real_neighbours) > 1:
+            furthest_parent = real_neighbours[0]
+            for parent in real_neighbours:
+                if get_distance(parent, vertex) > get_distance(furthest_parent, vertex):
+                    furthest_parent = parent
+            # make edge furthest parent, target cost = 0
+            sol_g._g.es[sol_g._g.get_eid(furthest_parent, sol_g.target)]['cost'] = 0
+            actually_changed.append(vertex)
+    return actually_changed
+
 
 if __name__ == '__main__':
     import time
@@ -293,82 +348,57 @@ if __name__ == '__main__':
         # seq = int(seq)
 
         sol_dir = os.path.join(ROOT_DATA_DIR, ds_name, '{0:02}_RES/'.format(seq))
-        sol_pth = os.path.join(sol_dir, 'full_solution.graphml')
+        sol_pth = os.path.join(sol_dir, 'final_solution.graphml')
         seg_pth = os.path.join(ROOT_DATA_DIR, ds_name, '{0:02}_ST/SEG/'.format(seq))
         gt_pth = os.path.join(ROOT_DATA_DIR, ds_name, '{0:02}_GT/TRA/'.format(seq))
 
-        if merges[key]['n_merges'] and \
-                metric_info[key]['DET'] < 1:
-                    
-            print(f"Running oracle for {key}")
-            sol_g, sol_ims, sol_coords = load_sol_data(sol_pth, seg_pth)
-            gt_ims, gt_graph, gt_coords = get_gt_graph(gt_pth, return_ims=True)
-            merge_node_ids = merges[key]['merge_nodes']
-            
-            oracle = get_oracle(merge_node_ids, sol_g, sol_coords, gt_coords, sol_ims, gt_ims)
-            introduce_vertices = dict(filter(lambda item: item[1]['decision'] == 'introduce', oracle.items()))
-            rebuild_duration = 0
-            n_rebuilt = 0
-            # while we still found something to add
-            while len(introduce_vertices):
-                # introduce vertices into the graph
-                introduce_info = {
-                    int(item['v_info'][0]): (            # new_index
-                        int(item['v_info'][1][0]),  # t
-                        item['v_info'][1][1:-1],    # coords
-                        int(item['v_info'][1][-1]))      # new_label
-                    for item in introduce_vertices.values()
-                    }
-                
-                rebuild_t, n = sol_g.introduce_vertices(introduce_info)
-                rebuild_duration += rebuild_t
-                n_rebuilt += n
-                mask_new_vertices(introduce_info, sol_ims, gt_ims)
+        if key in oracles and oracles[key] is not None:
+            final_oracle = oracles[key]
 
-                # re-build and solve model
+            print(f"Running oracle for {key}")
+            sol_g, sol_ims, sol_coords = load_final_sol_data(sol_pth, seg_pth)
+            # gt_ims, gt_graph, gt_coords = get_gt_graph(gt_pth, return_ims=True)
+            
+            actually_changed = []
+            term_vertices = [int(key) for key in final_oracle if final_oracle[key]['decision'] == 'terminate']
+            terminate_ts = list(sorted(set([sol_g._g.vs[int(node)]['t'] for node in term_vertices])))
+            for t in terminate_ts:
+                frame_vertices = [sol_g._g.vs[k] for k in term_vertices if sol_g._g.vs[k]['t']==t]
+                actually_changed.extend(terminate_vertices(frame_vertices, sol_g))
+
+            # re-build and solve model
+            m, flow = sol_g._to_gurobi_model()
+            m.optimize()
+            if m.Status == 3:
+                infinite_cost_edges = sol_g._g.es.select(cost_ge=1e10)
+                sol_g._g.delete_edges(infinite_cost_edges)
                 m, flow = sol_g._to_gurobi_model()
                 m.optimize()
-                if m.Status == 3:
-                    infinite_cost_edges = sol_g._g.es.select(cost_ge=1e10)
-                    sol_g._g.delete_edges(infinite_cost_edges)
-                    m, flow = sol_g._to_gurobi_model()
-                    m.optimize()
-                    if m.Status != 2:
-                        raise ValueError(f"Attempted to remove infinite cost edges but model for {key} was still not solved.")
-                
-                # save new solution onto graph 
-                store_time = sol_g.store_solution(m)
-                sol_coords = sol_g.get_coords_df()
-                
-                current_merges = get_merges(sol_g)
-                new_merges = set(current_merges) - (set(oracle.keys()) - set(introduce_vertices.keys()))
-                
-                # still need to check every vertex that was originally in terminate and is still a merge and new merges
-                new_oracle = get_oracle(current_merges, sol_g, sol_coords, gt_coords, sol_ims, gt_ims)
-                introduce_vertices = dict(filter(lambda item: item[1]['decision'] == 'introduce', new_oracle.items()))
-                oracle.update(new_oracle)
-                
-            oracles[key] = oracle
-            final_sol_pth = os.path.join(sol_dir, 'final_solution.graphml')
+                if m.Status != 2:
+                    raise ValueError(f"Attempted to remove infinite cost edges but model for {key} was still not solved.")
+            
+            # save new solution onto graph 
+            store_time = sol_g.store_solution(m)
+            sol_coords = sol_g.get_coords_df()
+            
+            current_merges = get_merges(sol_g)
+            new_merges = set(current_merges) - (set(final_oracle.keys()) - set(term_vertices))
+                            
+            final_sol_pth = os.path.join(sol_dir, 'terminate_solution.graphml')
             nx_g = sol_g.convert_sol_igraph_to_nx()
             nx.write_graphml_lxml(nx_g, final_sol_pth)
             
-            used_ds_names.append(key)
-            rebuild_durations.append(rebuild_duration)
-            rebuilt_frames.append(n_rebuilt)
-            total_merges.append(len(oracle))
-            total_introduced.append(len([k for k in oracle if oracle[k]['decision'] == 'introduce']))
-        else:
-            print(f"Skipping oracle for {key}")
-            oracles[key] = None
-        with open(oracle_pth, 'w') as f:
-            json.dump(oracles, f)
-        for i in range(len(used_ds_names)):
-            ds_name = used_ds_names[i]
-            name, seq = tuple(ds_name.split('_'))
-            row_idx = ds_summary_df[(ds_summary_df.ds_name == name) & (ds_summary_df.seq == int(seq))].index[0]
-            ds_summary_df.at[row_idx,'rebuild_time']= rebuild_durations[i]
-            ds_summary_df.at[row_idx, 'n_rebuilt'] = rebuilt_frames[i]
-            ds_summary_df.at[row_idx, 'total_merges'] = total_merges[i]
-            ds_summary_df.at[row_idx, 'total_introduced'] = total_introduced[i]
-        ds_summary_df.to_csv('/media/ddon0001/Elements/BMVC/data/cell_tracking_challenge/ST_Segmentations/ds_summary.csv')
+            # used_ds_names.append(key)
+            # rebuild_durations.append(rebuild_duration)
+            # rebuilt_frames.append(n_rebuilt)
+            # total_merges.append(len(oracle))
+            # total_introduced.append(len([k for k in oracle if oracle[k]['decision'] == 'introduce']))
+        # for i in range(len(used_ds_names)):
+        #     ds_name = used_ds_names[i]
+        #     name, seq = tuple(ds_name.split('_'))
+        #     row_idx = ds_summary_df[(ds_summary_df.ds_name == name) & (ds_summary_df.seq == int(seq))].index[0]
+        #     ds_summary_df.at[row_idx,'rebuild_time']= rebuild_durations[i]
+        #     ds_summary_df.at[row_idx, 'n_rebuilt'] = rebuilt_frames[i]
+        #     ds_summary_df.at[row_idx, 'total_merges'] = total_merges[i]
+        #     ds_summary_df.at[row_idx, 'total_introduced'] = total_introduced[i]
+        # ds_summary_df.to_csv('/media/ddon0001/Elements/BMVC/data/cell_tracking_challenge/ST_Segmentations/ds_summary.csv')

@@ -14,8 +14,8 @@ import pandas as pd
 import time
 import pprint
 
-ROOT_DATA_DIR = '/home/draga/PhD/data/cell_tracking_challenge/ST_Segmentations/'
-ds_summary_df = pd.read_csv('/home/draga/PhD/data/cell_tracking_challenge/ST_Segmentations/ds_summary.csv', index_col=0)
+ROOT_DATA_DIR = '/media/ddon0001/Elements/BMVC/data/cell_tracking_challenge/ST_Segmentations/'
+ds_summary_df = pd.read_csv('/media/ddon0001/Elements/BMVC/data/cell_tracking_challenge/ST_Segmentations/ds_summary.csv', index_col=0)
 
 def load_sol(sol_path, seg_path, gt_ims=None):
     seg = load_tiff_frames(seg_path)
@@ -29,16 +29,15 @@ def load_sol(sol_path, seg_path, gt_ims=None):
     return track_data
 
 if __name__ == '__main__':
-    metrics_pth = '/home/draga/PhD/data/cell_tracking_challenge/ST_Segmentations/ctc_metrics.json'
+    metrics_pth = '/media/ddon0001/Elements/BMVC/data/cell_tracking_challenge/ST_Segmentations/ctc_metrics_final.json'
     
-    with open(metrics_pth, 'r') as f:
-        result_dict = json.load(f)
+    result_dict = {}
     for i, row in enumerate(ds_summary_df.itertuples(), 1):
         ds_name = row.ds_name
         seq = row.seq
         
         sol_dir = os.path.join(ROOT_DATA_DIR, ds_name, '{0:02}_RES/'.format(seq))
-        sol_pth = os.path.join(sol_dir, 'full_solution.graphml')
+        sol_pth = os.path.join(sol_dir, 'final_solution.graphml')
         seg_pth = os.path.join(ROOT_DATA_DIR, ds_name, '{0:02}_ST/SEG/'.format(seq))
         gt_pth = os.path.join(ROOT_DATA_DIR, ds_name, '{0:02}_GT/TRA/'.format(seq))
         
@@ -47,7 +46,8 @@ if __name__ == '__main__':
             print(f"Skipping {key}. Already computed metrics.")
             continue
         if not os.path.exists(sol_pth):
-            raise ValueError(f"Can't find solution graph for {key}")
+            print(f"No oracle solution graph available for {key}")
+            continue
         else:
             print(f"Computing {ds_name} sequence {seq}")
             try:
